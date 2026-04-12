@@ -179,6 +179,7 @@ pub fn disk_free(path: &Path) -> Option<u64> {
     unsafe {
         let mut stat: libc::statfs = std::mem::zeroed();
         if libc::statfs(c_path.as_ptr(), &mut stat) == 0 {
+            #[allow(clippy::unnecessary_cast)] // types differ across platforms
             Some(stat.f_bavail as u64 * stat.f_bsize as u64)
         } else {
             None
