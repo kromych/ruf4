@@ -235,6 +235,27 @@ pub fn do_move(state: &mut State, dest: &str) {
     continue_copy_move(state, pairs, Vec::new(), false);
 }
 
+pub fn do_rename(state: &mut State, new_name: &str) {
+    if new_name.is_empty() {
+        state.dialog = Dialog::None;
+        return;
+    }
+    let panel = state.active_panel();
+    let old_path = panel.path.join(&panel.entries[panel.cursor].name);
+    let new_path = panel.path.join(new_name);
+    match fs::rename(&old_path, &new_path) {
+        Ok(()) => {
+            state.dialog = Dialog::None;
+            state.active_panel_mut().refresh();
+        }
+        Err(e) => {
+            state.dialog = Dialog::Error {
+                message: format!("Rename failed: {e}"),
+            };
+        }
+    }
+}
+
 pub fn execute_command(state: &mut State) {
     let cmd = state.command_line.clone();
     state.record_command(&cmd);

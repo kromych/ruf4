@@ -75,8 +75,9 @@ If you are a developer, [here](./ReleaseFlow.md) are the gory details and notes 
 
 | Key | Action |
 |-----|--------|
+| F4 | Rename |
 | F5 | Copy |
-| F6 | Rename / Move |
+| F6 | Move |
 | F7 | Make directory |
 | F8 | Delete |
 | Delete | Delete |

@@ -36,6 +36,7 @@ pub const HELP_TEXT: &[(&str, &str)] = &[
     ("F1", "Help"),
     ("F2", "Save settings"),
     ("F3 / Ctrl+Q", "Toggle quick view"),
+    ("F4", "Rename"),
     ("F5", "Copy"),
     ("F6", "Rename / Move"),
     ("F7", "Make directory"),
@@ -138,6 +139,9 @@ pub enum Dialog {
         pending: Vec<(PathBuf, PathBuf)>,
         errors: Vec<String>,
         is_copy: bool,
+    },
+    Rename {
+        name: String,
     },
     ChooseSort {
         cursor: usize,
@@ -348,6 +352,23 @@ impl State {
             let dest = self.inactive_panel().path.to_string_lossy().into_owned();
             self.dialog = Dialog::Move { files, dest };
         }
+    }
+
+    pub fn open_rename_dialog(&mut self) {
+        let panel = self.active_panel();
+        if panel.entries.is_empty() {
+            return;
+        }
+        let entry = &panel.entries[panel.cursor];
+        if entry.name == ".." {
+            self.dialog = Dialog::Error {
+                message: "Cannot rename '..'".to_string(),
+            };
+            return;
+        }
+        self.dialog = Dialog::Rename {
+            name: entry.name.clone(),
+        };
     }
 
     pub fn open_delete_dialog(&mut self) {
@@ -685,6 +706,7 @@ impl State {
                     self.preview_path = None;
                 }
             }
+            3 => self.open_rename_dialog(),
             4 => self.open_copy_dialog(),
             5 => self.open_move_dialog(),
             6 => {
@@ -740,6 +762,7 @@ impl State {
                 self.handle_dismiss_dialog(ev);
             }
             Dialog::MkDir { .. }
+            | Dialog::Rename { .. }
             | Dialog::Copy { .. }
             | Dialog::Move { .. }
             | Dialog::SelectGroup { .. } => {
@@ -801,6 +824,7 @@ impl State {
     fn dialog_text_field(&mut self) -> Option<&mut String> {
         match &mut self.dialog {
             Dialog::MkDir { name } => Some(name),
+            Dialog::Rename { name } => Some(name),
             Dialog::Copy { dest, .. } => Some(dest),
             Dialog::Move { dest, .. } => Some(dest),
             Dialog::SelectGroup { pattern, .. } => Some(pattern),
@@ -822,6 +846,10 @@ impl State {
             Dialog::Move { dest, .. } => {
                 let dest = dest.clone();
                 fileops::do_move(self, &dest);
+            }
+            Dialog::Rename { name } => {
+                let name = name.clone();
+                fileops::do_rename(self, &name);
             }
             Dialog::SelectGroup { pattern, select } => {
                 let pat = pattern.clone();
@@ -1197,6 +1225,7 @@ impl State {
                     self.update_preview();
                 }
             }
+            "F4" => self.open_rename_dialog(),
             "F5" => self.open_copy_dialog(),
             "F6" => self.open_move_dialog(),
             "F7" => {
