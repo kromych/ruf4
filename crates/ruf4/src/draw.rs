@@ -427,23 +427,42 @@ fn draw_single_panel(
         let date_col = 16; // "2026-04-09 12:34"
         let size_col = 7;
         let name_w = (width - 2 - date_col - size_col - 2).max(4) as usize;
-        let display_name = if entry.name.len() > name_w {
-            &entry.name[..entry.name.floor_char_boundary(name_w)]
-        } else {
-            &entry.name
-        };
 
         let size_str = entry.display_size();
         let date_str = entry.display_date();
 
-        let line = arena_format!(
-            ctx.arena(),
-            "{:<nw$} {:>7} {:>16}",
-            display_name,
-            size_str,
-            date_str,
-            nw = name_w
-        );
+        let line = if entry.name.len() <= name_w {
+            arena_format!(
+                ctx.arena(),
+                "{:<nw$} {:>7} {:>16}",
+                entry.name,
+                size_str,
+                date_str,
+                nw = name_w
+            )
+        } else {
+            // Truncate the stem, keep the extension visible.
+            // "very_long_name.txt" -> "very_lo….txt"
+            let (stem, ext) = match entry.name.rfind('.') {
+                Some(dot) if dot > 0 && dot < entry.name.len() - 1 => {
+                    (&entry.name[..dot], &entry.name[dot..]) // ext includes '.'
+                }
+                _ => (entry.name.as_str(), ""),
+            };
+            let ellipsis = "\u{2026}"; // …
+            let avail = name_w.saturating_sub(ext.len() + ellipsis.len());
+            let truncated_stem = &stem[..stem.floor_char_boundary(avail)];
+            let display_name =
+                arena_format!(ctx.arena(), "{truncated_stem}{ellipsis}{ext}");
+            arena_format!(
+                ctx.arena(),
+                "{:<nw$} {:>7} {:>16}",
+                &*display_name,
+                size_str,
+                date_str,
+                nw = name_w
+            )
+        };
         ctx.label("entry-text", &line);
 
         ctx.block_end();
