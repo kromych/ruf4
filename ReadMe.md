@@ -22,7 +22,7 @@ This is built in Rust on the TUI framework derived from
 very small and just enough.
 
 Runs on Linux, macOS, and Windows. [Here](./ReleaseFlow.md) are the gory details and
-notes on builds amd releases.
+notes on builds/releases.
 
 Runs on Linux, macOS, and Windows.
 
