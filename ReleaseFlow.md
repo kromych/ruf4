@@ -121,3 +121,12 @@ Pushing a version tag (e.g. `git tag v0.1.0 && git push --tags`) triggers a rele
 - Signs and notarizes the macOS builds (if Apple credentials are configured)
 - Packages as `.tar.gz` (Linux/macOS) or `.zip` (Windows)
 - Creates a GitHub release with all archives
+
+Here's how re-create the tag and the release for a failed release flow:
+
+```sh
+gh release delete v0.0.1 --yes    # delete the GitHub release
+git push origin :v0.0.1            # delete remote tag
+git tag -f v0.0.1                  # re-create tag at HEAD
+git push origin v0.0.1             # triggers fresh release workflow
+```
