@@ -205,6 +205,9 @@ fn draw_menubar(ctx: &mut Context, state: &mut State) -> bool {
         if ctx.consume_shortcut(kbmod::CTRL | vk::E) {
             state.open_cmd_history();
         }
+        if ctx.consume_shortcut(vk::F4) {
+            state.open_rename_dialog();
+        }
         if ctx.consume_shortcut(vk::F5) {
             state.open_copy_dialog();
         }
@@ -802,7 +805,7 @@ fn draw_fn_bar(ctx: &mut Context, size: Size) {
             ("1", "Help"),
             ("2", "Save"),
             ("3", "QView"),
-            ("4", "Edit"),
+            ("4", "Ren"),
             ("5", "Copy"),
             ("6", "RenMov"),
             ("7", "MkDir"),
@@ -842,6 +845,7 @@ fn draw_dialog(ctx: &mut Context, state: &mut State, size: Size) {
         Dialog::None => {}
         Dialog::Help { scroll } => draw_help_dialog(ctx, *scroll, size),
         Dialog::MkDir { name } => draw_mkdir_dialog(ctx, name, size),
+        Dialog::Rename { name } => draw_rename_dialog(ctx, name, size),
         Dialog::Delete { files } => draw_delete_dialog(ctx, files, size),
         Dialog::Copy { files, dest } => draw_copy_move_dialog(ctx, "Copy", files, dest, size),
         Dialog::Move { files, dest } => {
@@ -1043,6 +1047,20 @@ fn draw_mkdir_dialog(ctx: &mut Context, name: &str, size: Size) {
         size,
     );
     dialog_prompt(ctx, "prompt", "Enter directory name:");
+    dialog_spacer(ctx, "sp-mid");
+    dialog_input(ctx, "input", name, w);
+    dialog_end(ctx);
+}
+
+fn draw_rename_dialog(ctx: &mut Context, name: &str, size: Size) {
+    let w = dialog_begin(
+        ctx,
+        &DIALOG_BLUE_50,
+        "Rename - Enter=OK  Esc=Cancel",
+        6,
+        size,
+    );
+    dialog_prompt(ctx, "prompt", "Enter new name:");
     dialog_spacer(ctx, "sp-mid");
     dialog_input(ctx, "input", name, w);
     dialog_end(ctx);
