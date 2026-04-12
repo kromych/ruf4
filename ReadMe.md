@@ -24,7 +24,16 @@ very small and just enough.
 Runs on Linux, macOS, and Windows. [Here](./ReleaseFlow.md) are the gory details and
 notes on builds/releases.
 
-Runs on Linux, macOS, and Windows.
+## Screenshots
+
+![Main view](resources/screenshots/how-it-looks.png)
+
+![Files menu](resources/screenshots/menu-files.png)
+![Commands menu](resources/screenshots/menu-commands.png)
+
+![Select root](resources/screenshots/select-root.png)
+![Directory history](resources/screenshots/history-directory.png)
+![Command history](resources/screenshots/history-commands.png)
 
 ## Keyboard shortcuts
 
