@@ -588,65 +588,72 @@ impl State {
     }
 
     fn handle_footer_click(&mut self, x: CoordType, clicked_left: bool) {
-        // Footer format: " N items | Sort:XX+ | [H] | ... "
-        // or:            " N sel, B bytes | Sort:XX+ | [H] | ... "
-        // Find "Sort:" and "[H]" positions by reconstructing the prefix.
+        // Reconstruct the footer string to find hit regions by substring search.
         let panel = if clicked_left {
             &self.left
         } else {
             &self.right
         };
         let (sel_count, sel_size) = panel.selection_info();
-        let prefix = if sel_count > 0 {
-            format!(" {sel_count} sel, {sel_size} bytes | ")
-        } else {
-            format!(" {} items | ", panel.entries.len())
-        };
         let sort_label = match panel.sort_by {
             SortBy::Name => "Name",
             SortBy::Extension => "Ext",
             SortBy::Size => "Size",
             SortBy::Modified => "Date",
         };
-
         let sort_arrow = match panel.sort_dir {
             crate::panel::SortDir::Ascending => "+",
             crate::panel::SortDir::Descending => "-",
         };
-
-        let panel_width = self.term_size.width / 2;
-        // Subtract panel origin and 1 for border to get text-relative x.
-        let local_x = if clicked_left {
-            x - 1
+        let hidden_label = if panel.show_hidden { "[H]" } else { "[ ]" };
+        let free = panel
+            .free_space()
+            .map(crate::panel::format_size)
+            .unwrap_or_else(|| "N/A".to_string());
+        let refreshed = &panel.last_refresh;
+        let footer = if sel_count > 0 {
+            format!(
+                " {sel_count} sel, {sel_size} bytes | Sort:{sort_label}{sort_arrow} | {hidden_label} | {free} free | updated {refreshed}"
+            )
         } else {
-            x - panel_width - 1
+            let total = panel.entries.len();
+            format!(
+                " {total} items | Sort:{sort_label}{sort_arrow} | {hidden_label} | {free} free | updated {refreshed}"
+            )
         };
 
-        // "Sort:" starts at prefix.len(), sort region = "Sort:XX+"
-        let sort_start = prefix.len();
-        let sort_text = format!("Sort:{sort_label}{sort_arrow}");
-        let sort_end = sort_start + sort_text.len();
+        // Footer text starts after the panel's left border (1 cell in).
+        // Both panels use the same offset: panel_left + 1 (border).
+        // draw_single_panel sets intrinsic_size to (width-2, height-2) so that
+        // intrinsic_to_outer() == (width, height), matching the table column spec.
+        // No column expansion occurs, so both panels start at their exact column.
+        let panel_width = self.term_size.width / 2;
+        let panel_left = if clicked_left { 0 } else { panel_width };
+        let text_origin = panel_left + 1;
+        let lx = (x - text_origin) as usize;
 
-        // "[H]" or "[ ]" follows " | "
-        let hidden_start = sort_end + 3; // " | "
-        let hidden_end = hidden_start + 3; // "[H]" or "[ ]"
-
-        let lx = local_x as usize;
-        if lx >= sort_start && lx < sort_end {
-            // Map current sort_by to cursor position in SORT_OPTIONS.
-            let cursor = SORT_OPTIONS
-                .iter()
-                .position(|(_, s)| *s == panel.sort_by)
-                .unwrap_or(0);
-            self.dialog = Dialog::ChooseSort { cursor };
-        } else if lx >= hidden_start && lx < hidden_end {
-            let panel = if clicked_left {
-                &mut self.left
-            } else {
-                &mut self.right
-            };
-            panel.show_hidden = !panel.show_hidden;
-            panel.refresh();
+        if let Some(sort_start) = footer.find("Sort:") {
+            let sort_end = sort_start + 5 + sort_label.len() + 1; // "Sort:" + label + arrow
+            if lx >= sort_start && lx < sort_end {
+                let cursor = SORT_OPTIONS
+                    .iter()
+                    .position(|(_, s)| *s == panel.sort_by)
+                    .unwrap_or(0);
+                self.dialog = Dialog::ChooseSort { cursor };
+                return;
+            }
+        }
+        if let Some(hidden_start) = footer.find(hidden_label) {
+            let hidden_end = hidden_start + hidden_label.len();
+            if lx >= hidden_start && lx < hidden_end {
+                let panel = if clicked_left {
+                    &mut self.left
+                } else {
+                    &mut self.right
+                };
+                panel.show_hidden = !panel.show_hidden;
+                panel.refresh();
+            }
         }
     }
 

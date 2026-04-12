@@ -342,7 +342,14 @@ fn draw_single_panel(
         (height - title_lines - header_lines - footer_lines - border_lines).max(1) as usize;
 
     ctx.block_begin(classname);
-    ctx.attr_intrinsic_size(Size { width, height });
+    // Set intrinsic size to the *inner* dimensions (excluding border).
+    // The border (added by attr_border) contributes +2 to intrinsic_to_outer(),
+    // so the table column sees outer = width, matching the column spec exactly.
+    // This prevents column expansion and keeps both panels at identical offsets.
+    ctx.attr_intrinsic_size(Size {
+        width: width - 2,
+        height: height - 2,
+    });
     ctx.attr_border();
 
     if is_active {
@@ -511,7 +518,10 @@ fn draw_preview_panel(ctx: &mut Context, state: &State, width: CoordType, height
     let visible_height = (height - border_lines).max(1) as usize;
 
     ctx.block_begin("preview-panel");
-    ctx.attr_intrinsic_size(Size { width, height });
+    ctx.attr_intrinsic_size(Size {
+        width: width - 2,
+        height: height - 2,
+    });
     ctx.attr_border();
     ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightGreen));
 
