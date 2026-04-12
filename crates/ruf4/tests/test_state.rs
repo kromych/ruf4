@@ -191,6 +191,7 @@ fn test_command_line_backspace_clears() {
     let mut s = test_state();
     s.command_line_active = true;
     s.command_line = "x".to_string();
+    s.cmd_cursor = 1;
     s.handle_global_input(&Input::Keyboard(vk::BACK));
     assert!(!s.command_line_active); // auto-deactivate when empty
 }
@@ -239,6 +240,7 @@ fn test_mkdir_dialog_backspace() {
     s.dialog = Dialog::MkDir {
         name: "abc".to_string(),
     };
+    s.input_cursor = 3; // cursor at end of "abc"
     s.handle_global_input(&Input::Keyboard(vk::BACK));
     if let Dialog::MkDir { name } = &s.dialog {
         assert_eq!(name, "ab");

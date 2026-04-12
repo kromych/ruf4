@@ -720,31 +720,60 @@ fn draw_path_bar(ctx: &mut Context, state: &State, size: Size) {
         let prompt_char = platform::prompt_symbol();
 
         if state.command_line_active {
+            use ruf4_tui::framebuffer::Attributes;
+
             ctx.styled_label_begin("path-text");
             ctx.styled_label_set_foreground(ctx.indexed(IndexedColor::White));
             let prefix = arena_format!(ctx.arena(), " {path}");
             ctx.styled_label_add_text(&prefix);
             draw_prompt_char(ctx, prompt_char);
             ctx.styled_label_set_foreground(ctx.indexed(IndexedColor::BrightWhite));
-            ctx.styled_label_add_text(&state.command_line);
-            ctx.styled_label_set_foreground(ctx.indexed(IndexedColor::BrightCyan));
-            ctx.styled_label_add_text("_");
+            ctx.styled_label_add_text(" ");
+
+            let cmd = &state.command_line;
+            let byte_pos = cmd
+                .char_indices()
+                .nth(state.cmd_cursor)
+                .map_or(cmd.len(), |(i, _)| i);
+            let (before, after) = cmd.split_at(byte_pos);
+            ctx.styled_label_add_text(before);
+
+            ctx.styled_label_set_attributes(Attributes::Underlined);
+            if after.is_empty() {
+                ctx.styled_label_add_text(" ");
+            } else {
+                let next = after
+                    .char_indices()
+                    .nth(1)
+                    .map_or(after.len(), |(i, _)| i);
+                ctx.styled_label_add_text(&after[..next]);
+                ctx.styled_label_set_attributes(Attributes::None);
+                ctx.styled_label_set_foreground(ctx.indexed(IndexedColor::BrightWhite));
+                ctx.styled_label_add_text(&after[next..]);
+            }
             ctx.styled_label_end();
         } else if !state.alt_search.is_empty() {
+            use ruf4_tui::framebuffer::Attributes;
+
             ctx.styled_label_begin("path-text");
             ctx.styled_label_set_foreground(ctx.indexed(IndexedColor::White));
             ctx.styled_label_add_text(" search: ");
             ctx.styled_label_set_foreground(ctx.indexed(IndexedColor::BrightYellow));
             ctx.styled_label_add_text(&state.alt_search);
-            ctx.styled_label_set_foreground(ctx.indexed(IndexedColor::BrightCyan));
-            ctx.styled_label_add_text("_");
+            ctx.styled_label_set_attributes(Attributes::Underlined);
+            ctx.styled_label_add_text(" ");
             ctx.styled_label_end();
         } else {
+            use ruf4_tui::framebuffer::Attributes;
+
             ctx.styled_label_begin("path-text");
             ctx.styled_label_set_foreground(ctx.indexed(IndexedColor::BrightWhite));
             let text = arena_format!(ctx.arena(), " {path}");
             ctx.styled_label_add_text(&text);
             draw_prompt_char(ctx, prompt_char);
+            ctx.styled_label_add_text(" ");
+            ctx.styled_label_set_attributes(Attributes::Underlined);
+            ctx.styled_label_add_text(" ");
             ctx.styled_label_end();
         }
     }
@@ -841,15 +870,18 @@ fn draw_fn_bar(ctx: &mut Context, size: Size) {
 }
 
 fn draw_dialog(ctx: &mut Context, state: &mut State, size: Size) {
+    let input_cursor = state.input_cursor;
     match &mut state.dialog {
         Dialog::None => {}
         Dialog::Help { scroll } => draw_help_dialog(ctx, *scroll, size),
-        Dialog::MkDir { name } => draw_mkdir_dialog(ctx, name, size),
-        Dialog::Rename { name } => draw_rename_dialog(ctx, name, size),
+        Dialog::MkDir { name } => draw_mkdir_dialog(ctx, name, input_cursor, size),
+        Dialog::Rename { name } => draw_rename_dialog(ctx, name, input_cursor, size),
         Dialog::Delete { files } => draw_delete_dialog(ctx, files, size),
-        Dialog::Copy { files, dest } => draw_copy_move_dialog(ctx, "Copy", files, dest, size),
+        Dialog::Copy { files, dest } => {
+            draw_copy_move_dialog(ctx, "Copy", files, dest, input_cursor, size)
+        }
         Dialog::Move { files, dest } => {
-            draw_copy_move_dialog(ctx, "Rename/Move", files, dest, size)
+            draw_copy_move_dialog(ctx, "Rename/Move", files, dest, input_cursor, size)
         }
         Dialog::Info { message } => draw_info_dialog(ctx, message, size),
         Dialog::Error { message } => draw_error_dialog(ctx, message, size),
@@ -860,7 +892,7 @@ fn draw_dialog(ctx: &mut Context, state: &mut State, size: Size) {
         } => draw_shell_output_dialog(ctx, command, output, *scroll, size),
         Dialog::ConfirmQuit { save_settings } => draw_confirm_quit_dialog(ctx, save_settings, size),
         Dialog::SelectGroup { pattern, select } => {
-            draw_select_group_dialog(ctx, pattern, *select, size)
+            draw_select_group_dialog(ctx, pattern, *select, input_cursor, size)
         }
         Dialog::ChooseRoot { roots, cursor } => {
             let strs: Vec<_> = roots
@@ -1000,7 +1032,15 @@ fn dialog_prompt(ctx: &mut Context, id: &'static str, text: &str) {
     ctx.label(id, text);
 }
 
-fn dialog_input(ctx: &mut Context, id: &'static str, text: &str, width: CoordType) {
+fn dialog_input(
+    ctx: &mut Context,
+    id: &'static str,
+    text: &str,
+    cursor: usize,
+    width: CoordType,
+) {
+    use ruf4_tui::framebuffer::Attributes;
+
     ctx.block_begin(id);
     ctx.attr_intrinsic_size(Size {
         width: width - 4,
@@ -1009,8 +1049,29 @@ fn dialog_input(ctx: &mut Context, id: &'static str, text: &str, width: CoordTyp
     ctx.attr_background_rgba(ctx.indexed(IndexedColor::Cyan));
     ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::Black));
     {
-        let display = arena_format!(ctx.arena(), "{text}_");
-        ctx.label("input-text", &display);
+        let byte_pos = text
+            .char_indices()
+            .nth(cursor)
+            .map_or(text.len(), |(i, _)| i);
+        let (before, after) = text.split_at(byte_pos);
+
+        ctx.styled_label_begin("input-text");
+        ctx.styled_label_add_text(before);
+
+        // Draw the character under the cursor underlined; use a space if at end.
+        ctx.styled_label_set_attributes(Attributes::Underlined);
+        if after.is_empty() {
+            ctx.styled_label_add_text(" ");
+        } else {
+            let next = after
+                .char_indices()
+                .nth(1)
+                .map_or(after.len(), |(i, _)| i);
+            ctx.styled_label_add_text(&after[..next]);
+            ctx.styled_label_set_attributes(Attributes::None);
+            ctx.styled_label_add_text(&after[next..]);
+        }
+        ctx.styled_label_end();
     }
     ctx.block_end();
 }
@@ -1038,7 +1099,7 @@ fn dialog_file_list(ctx: &mut Context, files: &[String], max_show: usize, width:
 
 // Individual dialogs
 
-fn draw_mkdir_dialog(ctx: &mut Context, name: &str, size: Size) {
+fn draw_mkdir_dialog(ctx: &mut Context, name: &str, cursor: usize, size: Size) {
     let w = dialog_begin(
         ctx,
         &DIALOG_BLUE_50,
@@ -1048,11 +1109,11 @@ fn draw_mkdir_dialog(ctx: &mut Context, name: &str, size: Size) {
     );
     dialog_prompt(ctx, "prompt", "Enter directory name:");
     dialog_spacer(ctx, "sp-mid");
-    dialog_input(ctx, "input", name, w);
+    dialog_input(ctx, "input", name, cursor, w);
     dialog_end(ctx);
 }
 
-fn draw_rename_dialog(ctx: &mut Context, name: &str, size: Size) {
+fn draw_rename_dialog(ctx: &mut Context, name: &str, cursor: usize, size: Size) {
     let w = dialog_begin(
         ctx,
         &DIALOG_BLUE_50,
@@ -1062,7 +1123,7 @@ fn draw_rename_dialog(ctx: &mut Context, name: &str, size: Size) {
     );
     dialog_prompt(ctx, "prompt", "Enter new name:");
     dialog_spacer(ctx, "sp-mid");
-    dialog_input(ctx, "input", name, w);
+    dialog_input(ctx, "input", name, cursor, w);
     dialog_end(ctx);
 }
 
@@ -1088,7 +1149,14 @@ fn draw_delete_dialog(ctx: &mut Context, files: &[String], size: Size) {
     dialog_end(ctx);
 }
 
-fn draw_copy_move_dialog(ctx: &mut Context, title: &str, files: &[String], dest: &str, size: Size) {
+fn draw_copy_move_dialog(
+    ctx: &mut Context,
+    title: &str,
+    files: &[String],
+    dest: &str,
+    cursor: usize,
+    size: Size,
+) {
     let caption = arena_format!(ctx.arena(), "{title} - Enter=OK  Esc=Cancel");
     let w = dialog_begin(ctx, &DIALOG_BLUE_60, &caption, 8, size);
     {
@@ -1099,7 +1167,7 @@ fn draw_copy_move_dialog(ctx: &mut Context, title: &str, files: &[String], dest:
         };
         dialog_prompt(ctx, "prompt", &msg);
         dialog_spacer(ctx, "sp-mid");
-        dialog_input(ctx, "input", dest, w);
+        dialog_input(ctx, "input", dest, cursor, w);
     }
     dialog_end(ctx);
 }
@@ -1261,7 +1329,13 @@ fn draw_shell_output_dialog(
     ctx.modal_end();
 }
 
-fn draw_select_group_dialog(ctx: &mut Context, pattern: &str, select: bool, size: Size) {
+fn draw_select_group_dialog(
+    ctx: &mut Context,
+    pattern: &str,
+    select: bool,
+    cursor: usize,
+    size: Size,
+) {
     let title = if select {
         "Select Group - Enter=OK  Esc=Cancel"
     } else {
@@ -1276,7 +1350,7 @@ fn draw_select_group_dialog(ctx: &mut Context, pattern: &str, select: bool, size
         };
         dialog_prompt(ctx, "prompt", prompt);
         dialog_spacer(ctx, "sp-mid");
-        dialog_input(ctx, "input", pattern, w);
+        dialog_input(ctx, "input", pattern, cursor, w);
     }
     dialog_end(ctx);
 }
