@@ -36,12 +36,6 @@ jobs:
             archive: ruf4-macos-aarch64.tar.gz
             archive_type: tar
             sign: true
-          - name: macos-x86_64
-            os: macos-13
-            binary: ruf4
-            archive: ruf4-macos-x86_64.tar.gz
-            archive_type: tar
-            sign: true
           - name: windows-x86_64
             os: windows-latest
             binary: ruf4.exe
@@ -54,7 +48,7 @@ jobs:
             archive_type: zip
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release
@@ -117,7 +111,7 @@ jobs:
         if: runner.os == 'Windows'
         run: Compress-Archive -Path target/release/${{ matrix.binary }} -DestinationPath ${{ matrix.archive }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: ${{ matrix.archive }}
           path: ${{ matrix.archive }}
@@ -127,9 +121,9 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           path: artifacts
           merge-multiple: true
