@@ -21,7 +21,8 @@ This is built in Rust on the TUI framework derived from
 [Microsoft Edit](https://github.com/microsoft/edit). It is an immediate mode TUI,
 very small and just enough.
 
-Runs on Linux, macOS, and Windows. You can download the latest pre-release [0.0.1](https://github.com/kromych/ruf4/releases/tag/v0.0.1).
+Runs on Linux, macOS, and Windows. You can download the latest pre-release
+[0.0.2](https://github.com/kromych/ruf4/releases/tag/v0.0.2).
 
 If you are a developer, [here](./ReleaseFlow.md) are the gory details and notes on builds/releases.
 ## Screenshots
