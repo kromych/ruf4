@@ -882,9 +882,7 @@ impl State {
                     self.input_cursor = cur - 1;
                 } else if key == vk::DELETE {
                     let cur = self.input_cursor;
-                    let len = self
-                        .dialog_text_field()
-                        .map_or(0, |f| f.chars().count());
+                    let len = self.dialog_text_field().map_or(0, |f| f.chars().count());
                     if cur < len
                         && let Some(field) = self.dialog_text_field()
                     {
@@ -899,18 +897,14 @@ impl State {
                     self.input_cursor = self.input_cursor.saturating_sub(1);
                 } else if key == vk::RIGHT {
                     let cur = self.input_cursor;
-                    let len = self
-                        .dialog_text_field()
-                        .map_or(0, |f| f.chars().count());
+                    let len = self.dialog_text_field().map_or(0, |f| f.chars().count());
                     if cur < len {
                         self.input_cursor = cur + 1;
                     }
                 } else if key == vk::HOME {
                     self.input_cursor = 0;
                 } else if key == vk::END {
-                    let len = self
-                        .dialog_text_field()
-                        .map_or(0, |f| f.chars().count());
+                    let len = self.dialog_text_field().map_or(0, |f| f.chars().count());
                     self.input_cursor = len;
                 }
             }
@@ -1427,9 +1421,7 @@ impl State {
 
 /// Convert a char index to a byte index in a string.
 fn char_to_byte(s: &str, char_idx: usize) -> usize {
-    s.char_indices()
-        .nth(char_idx)
-        .map_or(s.len(), |(i, _)| i)
+    s.char_indices().nth(char_idx).map_or(s.len(), |(i, _)| i)
 }
 
 fn push_recent<T: PartialEq>(list: &mut Vec<T>, item: T) {

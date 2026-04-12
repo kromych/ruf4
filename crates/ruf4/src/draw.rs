@@ -742,10 +742,7 @@ fn draw_path_bar(ctx: &mut Context, state: &State, size: Size) {
             if after.is_empty() {
                 ctx.styled_label_add_text(" ");
             } else {
-                let next = after
-                    .char_indices()
-                    .nth(1)
-                    .map_or(after.len(), |(i, _)| i);
+                let next = after.char_indices().nth(1).map_or(after.len(), |(i, _)| i);
                 ctx.styled_label_add_text(&after[..next]);
                 ctx.styled_label_set_attributes(Attributes::None);
                 ctx.styled_label_set_foreground(ctx.indexed(IndexedColor::BrightWhite));
@@ -1032,13 +1029,7 @@ fn dialog_prompt(ctx: &mut Context, id: &'static str, text: &str) {
     ctx.label(id, text);
 }
 
-fn dialog_input(
-    ctx: &mut Context,
-    id: &'static str,
-    text: &str,
-    cursor: usize,
-    width: CoordType,
-) {
+fn dialog_input(ctx: &mut Context, id: &'static str, text: &str, cursor: usize, width: CoordType) {
     use ruf4_tui::framebuffer::Attributes;
 
     ctx.block_begin(id);
@@ -1063,10 +1054,7 @@ fn dialog_input(
         if after.is_empty() {
             ctx.styled_label_add_text(" ");
         } else {
-            let next = after
-                .char_indices()
-                .nth(1)
-                .map_or(after.len(), |(i, _)| i);
+            let next = after.char_indices().nth(1).map_or(after.len(), |(i, _)| i);
             ctx.styled_label_add_text(&after[..next]);
             ctx.styled_label_set_attributes(Attributes::None);
             ctx.styled_label_add_text(&after[next..]);
