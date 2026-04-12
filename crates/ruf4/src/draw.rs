@@ -326,6 +326,35 @@ fn draw_panels(ctx: &mut Context, state: &State, size: Size) {
     ctx.table_end();
 }
 
+/// Compute the display (column) width of a string, accounting for
+/// multi-byte characters and wide (CJK) characters.
+fn str_display_width(s: &str) -> usize {
+    use ruf4_tui::unicode::tables::ucd_grapheme_cluster_character_width;
+    use ruf4_tui::unicode::tables::ucd_grapheme_cluster_lookup;
+    s.chars()
+        .map(|c| {
+            let props = ucd_grapheme_cluster_lookup(c);
+            ucd_grapheme_cluster_character_width(props, 1)
+        })
+        .sum()
+}
+
+/// Truncate a string to fit within `max_cols` display columns.
+fn truncate_to_display_width(s: &str, max_cols: usize) -> &str {
+    use ruf4_tui::unicode::tables::ucd_grapheme_cluster_character_width;
+    use ruf4_tui::unicode::tables::ucd_grapheme_cluster_lookup;
+    let mut cols = 0;
+    for (i, c) in s.char_indices() {
+        let props = ucd_grapheme_cluster_lookup(c);
+        let w = ucd_grapheme_cluster_character_width(props, 1);
+        if cols + w > max_cols {
+            return &s[..i];
+        }
+        cols += w;
+    }
+    s
+}
+
 fn draw_single_panel(
     ctx: &mut Context,
     panel: &Panel,
@@ -431,14 +460,16 @@ fn draw_single_panel(
         let size_str = entry.display_size();
         let date_str = entry.display_date();
 
-        let line = if entry.name.len() <= name_w {
+        let name_display_w = str_display_width(&entry.name);
+        let line = if name_display_w <= name_w {
+            let pad = name_w - name_display_w;
             arena_format!(
                 ctx.arena(),
-                "{:<nw$} {:>7} {:>16}",
+                "{}{:pad$} {:>7} {:>16}",
                 entry.name,
+                "",
                 size_str,
                 date_str,
-                nw = name_w
             )
         } else {
             // Truncate the stem, keep the extension visible.
@@ -450,16 +481,20 @@ fn draw_single_panel(
                 _ => (entry.name.as_str(), ""),
             };
             let ellipsis = "\u{2026}"; // …
-            let avail = name_w.saturating_sub(ext.len() + ellipsis.len());
-            let truncated_stem = &stem[..stem.floor_char_boundary(avail)];
+            let ext_w = str_display_width(ext);
+            let ellipsis_w = 1; // … is 1 column wide
+            let avail = name_w.saturating_sub(ext_w + ellipsis_w);
+            let truncated_stem = truncate_to_display_width(stem, avail);
             let display_name = arena_format!(ctx.arena(), "{truncated_stem}{ellipsis}{ext}");
+            let display_w = str_display_width(&display_name);
+            let pad = name_w.saturating_sub(display_w);
             arena_format!(
                 ctx.arena(),
-                "{:<nw$} {:>7} {:>16}",
+                "{}{:pad$} {:>7} {:>16}",
                 &*display_name,
+                "",
                 size_str,
                 date_str,
-                nw = name_w
             )
         };
         ctx.label("entry-text", &line);
