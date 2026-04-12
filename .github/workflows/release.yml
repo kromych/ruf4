@@ -95,8 +95,7 @@ jobs:
           if [ -d "$APP_DIR" ]; then
             # Include the .app bundle in the archive alongside the bare binary.
             tar czf ${{ matrix.archive }} \
-              -C target/release ruf4.app \
-              -C target/release ${{ matrix.binary }}
+              -C target/release ruf4.app ${{ matrix.binary }}
           else
             tar czf ${{ matrix.archive }} -C target/release ${{ matrix.binary }}
           fi
