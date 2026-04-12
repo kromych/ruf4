@@ -26,13 +26,35 @@ Runs on Linux, macOS, and Windows. You can download the latest pre-release [0.0.
 If you are a developer, [here](./ReleaseFlow.md) are the gory details and notes on builds/releases.
 ## Screenshots
 
+### Main view
 ![Main view](resources/screenshots/how-it-looks.png)
 
+### Quick view for text
+
+![Quick view for text](resources/screenshots/qview-highlight.png)
+
+### Quick view for binaries
+
+![Quick view for binaries](resources/screenshots/qview-bin.png)
+
+### Files menu
+
 ![Files menu](resources/screenshots/menu-files.png)
+
+### Commands menu
+
 ![Commands menu](resources/screenshots/menu-commands.png)
 
+### Select FS root dialog
+
 ![Select root](resources/screenshots/select-root.png)
+
+### Directory history dialog
+
 ![Directory history](resources/screenshots/history-directory.png)
+
+### Command history dialog
+
 ![Command history](resources/screenshots/history-commands.png)
 
 ## Keyboard shortcuts
