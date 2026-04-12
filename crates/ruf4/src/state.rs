@@ -303,6 +303,9 @@ impl State {
 
     pub fn open_cmd_history(&mut self) {
         if self.cmd_history.is_empty() {
+            self.dialog = Dialog::Info {
+                message: "Command history is empty.".to_string(),
+            };
             return;
         }
         let entries = self.cmd_history.clone();
@@ -311,6 +314,9 @@ impl State {
 
     pub fn open_dir_history(&mut self) {
         if self.dir_history.is_empty() {
+            self.dialog = Dialog::Info {
+                message: "Directory history is empty.".to_string(),
+            };
             return;
         }
         let entries = self.dir_history.clone();
