@@ -2,7 +2,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use ruf4::fileops::{copy_dir_recursive, ops_build_pairs, ops_delete, ops_execute_all, ops_mkdir};
+use ruf4::fileops::{
+    copy_dir_recursive, move_across_filesystems, ops_build_pairs, ops_delete, ops_execute_all,
+    ops_mkdir,
+};
 use ruf4::platform::run_command;
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -194,6 +197,62 @@ fn test_ops_mkdir_empty_path_still_works() {
     // create_dir_all("") is a no-op on some platforms (macOS) and an error
     // on others. Just verify it doesn't panic.
     let _ = ops_mkdir(Path::new(""));
+}
+
+#[test]
+fn test_move_across_filesystems_file() {
+    // Exercises the copy+remove fallback used when fs::rename fails
+    // (e.g. across filesystem boundaries). Uses separate temp dirs
+    // to simulate the scenario on all platforms.
+    let src_root = temp_dir();
+    let dst_root = temp_dir();
+    let src = src_root.join("data.txt");
+    let dst = dst_root.join("data.txt");
+    fs::write(&src, "cross-device content").unwrap();
+
+    move_across_filesystems(&src, &dst).unwrap();
+    assert!(!src.exists(), "source file should be removed");
+    assert_eq!(fs::read_to_string(&dst).unwrap(), "cross-device content");
+
+    cleanup(&src_root);
+    cleanup(&dst_root);
+}
+
+#[test]
+fn test_move_across_filesystems_dir() {
+    let src_root = temp_dir();
+    let dst_root = temp_dir();
+    let src = src_root.join("mydir");
+    let dst = dst_root.join("mydir");
+    fs::create_dir_all(src.join("sub")).unwrap();
+    fs::write(src.join("a.txt"), "aaa").unwrap();
+    fs::write(src.join("sub/b.txt"), "bbb").unwrap();
+
+    move_across_filesystems(&src, &dst).unwrap();
+    assert!(!src.exists(), "source dir should be removed");
+    assert_eq!(fs::read_to_string(dst.join("a.txt")).unwrap(), "aaa");
+    assert_eq!(fs::read_to_string(dst.join("sub/b.txt")).unwrap(), "bbb");
+
+    cleanup(&src_root);
+    cleanup(&dst_root);
+}
+
+#[test]
+fn test_ops_execute_all_move_uses_fallback() {
+    // Move between separate directories — exercises the rename-then-fallback path.
+    let src_root = temp_dir();
+    let dst_root = temp_dir();
+    let src_file = src_root.join("move_me.txt");
+    let dst_file = dst_root.join("move_me.txt");
+    fs::write(&src_file, "moved").unwrap();
+
+    let errors = ops_execute_all(&[(src_file.clone(), dst_file.clone())], false);
+    assert!(errors.is_empty(), "errors: {errors:?}");
+    assert!(!src_file.exists(), "source should be gone after move");
+    assert_eq!(fs::read_to_string(&dst_file).unwrap(), "moved");
+
+    cleanup(&src_root);
+    cleanup(&dst_root);
 }
 
 #[test]

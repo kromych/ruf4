@@ -73,10 +73,41 @@ pub fn ops_execute_one(src: &Path, target: &Path, is_copy: bool, errors: &mut Ve
             fs::copy(src, target).map(|_| ())
         }
     } else {
-        fs::rename(src, target)
+        // fs::rename fails across filesystems/devices; fall back to copy + remove
+        // only for that specific error.
+        fs::rename(src, target).or_else(|e| {
+            if is_cross_device_error(&e) {
+                move_across_filesystems(src, target)
+            } else {
+                Err(e)
+            }
+        })
     };
     if let Err(e) = result {
         errors.push(format!("{name}: {e}"));
+    }
+}
+
+fn is_cross_device_error(e: &std::io::Error) -> bool {
+    // Unix: EXDEV (18), Windows: ERROR_NOT_SAME_DEVICE (17)
+    #[cfg(unix)]
+    const CROSS_DEVICE: i32 = libc::EXDEV;
+    #[cfg(windows)]
+    const CROSS_DEVICE: i32 = 17; // ERROR_NOT_SAME_DEVICE
+    #[cfg(not(any(unix, windows)))]
+    const CROSS_DEVICE: i32 = -1;
+    e.raw_os_error() == Some(CROSS_DEVICE)
+}
+
+/// Move by copying then removing the source. Used when `fs::rename` fails
+/// (e.g. across filesystem boundaries).
+pub fn move_across_filesystems(src: &Path, dst: &Path) -> std::io::Result<()> {
+    if src.is_dir() {
+        copy_dir_recursive(src, dst)?;
+        fs::remove_dir_all(src)
+    } else {
+        fs::copy(src, dst)?;
+        fs::remove_file(src)
     }
 }
 

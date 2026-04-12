@@ -452,8 +452,7 @@ fn draw_single_panel(
             let ellipsis = "\u{2026}"; // …
             let avail = name_w.saturating_sub(ext.len() + ellipsis.len());
             let truncated_stem = &stem[..stem.floor_char_boundary(avail)];
-            let display_name =
-                arena_format!(ctx.arena(), "{truncated_stem}{ellipsis}{ext}");
+            let display_name = arena_format!(ctx.arena(), "{truncated_stem}{ellipsis}{ext}");
             arena_format!(
                 ctx.arena(),
                 "{:<nw$} {:>7} {:>16}",
