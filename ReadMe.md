@@ -1,5 +1,7 @@
 # ruf4
 
+[![CI](https://github.com/kromych/ruf4/actions/workflows/ci.yml/badge.svg)](https://github.com/kromych/ruf4/actions/workflows/ci.yml)
+
 <p align="center">
   <img src="resources/icons/ruf4.svg" width="128" alt="ruf4 icon">
 </p>
