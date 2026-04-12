@@ -1,0 +1,33 @@
+// Windows resource file for ruf4
+// Icon (ID 1 = default application icon)
+1 ICON "../../resources/icons/ruf4.ico"
+
+// Version information
+1 VERSIONINFO
+FILEVERSION     0,1,0,0
+PRODUCTVERSION  0,1,0,0
+FILEFLAGSMASK   0x3fL
+FILEFLAGS       0x0L
+FILEOS          0x40004L
+FILETYPE        0x1L
+FILESUBTYPE     0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName",      "ruf4 contributors"
+            VALUE "FileDescription",  "ruf4 - Dual-panel file commander"
+            VALUE "FileVersion",      "0.1.0"
+            VALUE "InternalName",     "ruf4"
+            VALUE "LegalCopyright",   "Copyright (c) 2026 ruf4 contributors. MIT License."
+            VALUE "OriginalFilename", "ruf4.exe"
+            VALUE "ProductName",      "ruf4"
+            VALUE "ProductVersion",   "0.1.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

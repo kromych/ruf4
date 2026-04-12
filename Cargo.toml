@@ -1,0 +1,26 @@
+[workspace]
+default-members = ["crates/ruf4"]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/kromych/ruf4"
+rust-version = "1.93"
+
+[profile.release]
+codegen-units = 1
+debug = "full"
+lto = true
+opt-level = "s"
+panic = "abort"
+split-debuginfo = "packed"
+strip = "symbols"
+incremental = true
+
+[workspace.dependencies]
+lsh = { path = "./crates/lsh" }
+ruf4-tui = { path = "./crates/tui" }
+stdext = { path = "./crates/stdext" }
+libc = "0.2"

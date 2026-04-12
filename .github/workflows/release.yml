@@ -1,0 +1,144 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  EDIT_CFG_ICUUC_SONAME: icu.dll
+  EDIT_CFG_ICUI18N_SONAME: icu.dll
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            binary: ruf4
+            archive: ruf4-linux-x86_64.tar.gz
+            archive_type: tar
+          - name: linux-aarch64
+            os: ubuntu-24.04-arm
+            binary: ruf4
+            archive: ruf4-linux-aarch64.tar.gz
+            archive_type: tar
+          - name: macos-aarch64
+            os: macos-latest
+            binary: ruf4
+            archive: ruf4-macos-aarch64.tar.gz
+            archive_type: tar
+            sign: true
+          - name: macos-x86_64
+            os: macos-13
+            binary: ruf4
+            archive: ruf4-macos-x86_64.tar.gz
+            archive_type: tar
+            sign: true
+          - name: windows-x86_64
+            os: windows-latest
+            binary: ruf4.exe
+            archive: ruf4-windows-x86_64.zip
+            archive_type: zip
+          - name: windows-aarch64
+            os: windows-11-arm
+            binary: ruf4.exe
+            archive: ruf4-windows-aarch64.zip
+            archive_type: zip
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release
+
+      # --- macOS: build .app bundle, sign, and notarize ---
+      - name: Import Apple certificate
+        if: matrix.sign && env.APPLE_CERTIFICATE != ''
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          CERT_PATH="$RUNNER_TEMP/certificate.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_PATH"
+
+          security create-keychain -p "" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
+
+      - name: Build macOS app bundle
+        if: matrix.sign
+        run: python3 scripts/package-macos.py
+
+      - name: Sign and notarize macOS app
+        if: matrix.sign && env.APPLE_CERTIFICATE != ''
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          DEVELOPER_ID_APPLICATION: ${{ secrets.DEVELOPER_ID_APPLICATION }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+        run: python3 scripts/package-macos.py --sign --notarize
+
+      - name: Package macOS app bundle
+        if: matrix.sign
+        run: |
+          APP_DIR="target/release/ruf4.app"
+          if [ -d "$APP_DIR" ]; then
+            # Include the .app bundle in the archive alongside the bare binary.
+            tar czf ${{ matrix.archive }} \
+              -C target/release ruf4.app \
+              -C target/release ${{ matrix.binary }}
+          else
+            tar czf ${{ matrix.archive }} -C target/release ${{ matrix.binary }}
+          fi
+
+      # --- Linux: tar.gz ---
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: tar czf ${{ matrix.archive }} -C target/release ${{ matrix.binary }}
+
+      # --- Windows: zip ---
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: Compress-Archive -Path target/release/${{ matrix.binary }} -DestinationPath ${{ matrix.archive }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive }}
+          path: ${{ matrix.archive }}
+
+  release:
+    name: Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --generate-notes \
+            artifacts/*

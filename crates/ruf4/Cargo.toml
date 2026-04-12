@@ -1,0 +1,24 @@
+[package]
+name = "ruf4"
+version = "0.0.1"
+description = "A dual-panel file commander"
+
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+lsh.workspace = true
+ruf4-tui.workspace = true
+stdext.workspace = true
+
+[build-dependencies]
+embed-resource = "3"
+lsh.workspace = true
+stdext.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_System_Time", "Win32_System_SystemInformation", "Win32_Foundation"] }

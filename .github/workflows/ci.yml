@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  EDIT_CFG_ICUUC_SONAME: icu.dll
+  EDIT_CFG_ICUI18N_SONAME: icu.dll
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    name: Tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+          - os: macos-latest
+          - os: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace --lib --tests
+
+  build:
+    name: Build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            binary: target/release/ruf4
+            artifact: ruf4-linux-x86_64
+          - name: linux-aarch64
+            os: ubuntu-24.04-arm
+            binary: target/release/ruf4
+            artifact: ruf4-linux-aarch64
+          - name: macos-aarch64
+            os: macos-latest
+            binary: target/release/ruf4
+            artifact: ruf4-macos-aarch64
+          - name: macos-x86_64
+            os: macos-13
+            binary: target/release/ruf4
+            artifact: ruf4-macos-x86_64
+          - name: windows-x86_64
+            os: windows-latest
+            binary: target/release/ruf4.exe
+            artifact: ruf4-windows-x86_64
+            sign: true
+          - name: windows-aarch64
+            os: windows-11-arm
+            binary: target/release/ruf4.exe
+            artifact: ruf4-windows-aarch64
+            sign: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release
+      - name: Azure Trusted Signing
+        if: matrix.sign && env.AZURE_TENANT_ID != ''
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_ENDPOINT: ${{ secrets.AZURE_ENDPOINT }}
+          AZURE_ACCOUNT_NAME: ${{ secrets.AZURE_ACCOUNT_NAME }}
+          AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
+        shell: pwsh
+        run: |
+          dotnet tool install --global Microsoft.Trusted.Signing.Client
+          python3 scripts/sign-windows.py ${{ matrix.binary }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.binary }}

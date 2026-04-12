@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a3a5c"/>
+      <stop offset="100%" stop-color="#0d1f33"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#00b4d8"/>
+      <stop offset="100%" stop-color="#0077b6"/>
+    </linearGradient>
+  </defs>
+  <!-- Rounded background -->
+  <rect width="256" height="256" rx="40" fill="url(#bg)"/>
+  <!-- Left panel -->
+  <rect x="20" y="36" width="100" height="184" rx="8" fill="url(#panel)" opacity="0.9"/>
+  <!-- Right panel -->
+  <rect x="136" y="36" width="100" height="184" rx="8" fill="url(#panel)" opacity="0.7"/>
+  <!-- Subtle file entries on panels (below letters) -->
+  <rect x="32" y="162" width="76" height="5" rx="2" fill="#ffffff" opacity="0.3"/>
+  <rect x="32" y="174" width="60" height="5" rx="2" fill="#ffffff" opacity="0.25"/>
+  <rect x="32" y="186" width="68" height="5" rx="2" fill="#ffffff" opacity="0.25"/>
+  <rect x="32" y="198" width="52" height="5" rx="2" fill="#ffffff" opacity="0.2"/>
+  <rect x="148" y="162" width="72" height="5" rx="2" fill="#ffffff" opacity="0.25"/>
+  <rect x="148" y="174" width="56" height="5" rx="2" fill="#ffffff" opacity="0.2"/>
+  <rect x="148" y="186" width="64" height="5" rx="2" fill="#ffffff" opacity="0.2"/>
+  <rect x="148" y="198" width="48" height="5" rx="2" fill="#ffffff" opacity="0.15"/>
+  <!-- 8-bit pixel "RUF" in classic DOS yellow (#FFFF00) -->
+  <!-- Each pixel: 7x7 on an 8px grid. Letters are 5x7 cells. -->
+  <!-- R: x_base=60 -->
+  <rect x="60" y="68" width="7" height="7" fill="#FFFF00"/>
+  <rect x="68" y="68" width="7" height="7" fill="#FFFF00"/>
+  <rect x="76" y="68" width="7" height="7" fill="#FFFF00"/>
+  <rect x="84" y="68" width="7" height="7" fill="#FFFF00"/>
+  <rect x="60" y="76" width="7" height="7" fill="#FFFF00"/>
+  <rect x="92" y="76" width="7" height="7" fill="#FFFF00"/>
+  <rect x="60" y="84" width="7" height="7" fill="#FFFF00"/>
+  <rect x="92" y="84" width="7" height="7" fill="#FFFF00"/>
+  <rect x="60" y="92" width="7" height="7" fill="#FFFF00"/>
+  <rect x="68" y="92" width="7" height="7" fill="#FFFF00"/>
+  <rect x="76" y="92" width="7" height="7" fill="#FFFF00"/>
+  <rect x="84" y="92" width="7" height="7" fill="#FFFF00"/>
+  <rect x="60" y="100" width="7" height="7" fill="#FFFF00"/>
+  <rect x="76" y="100" width="7" height="7" fill="#FFFF00"/>
+  <rect x="60" y="108" width="7" height="7" fill="#FFFF00"/>
+  <rect x="84" y="108" width="7" height="7" fill="#FFFF00"/>
+  <rect x="60" y="116" width="7" height="7" fill="#FFFF00"/>
+  <rect x="92" y="116" width="7" height="7" fill="#FFFF00"/>
+  <!-- U: x_base=108 -->
+  <rect x="108" y="68" width="7" height="7" fill="#FFFF00"/>
+  <rect x="140" y="68" width="7" height="7" fill="#FFFF00"/>
+  <rect x="108" y="76" width="7" height="7" fill="#FFFF00"/>
+  <rect x="140" y="76" width="7" height="7" fill="#FFFF00"/>
+  <rect x="108" y="84" width="7" height="7" fill="#FFFF00"/>
+  <rect x="140" y="84" width="7" height="7" fill="#FFFF00"/>
+  <rect x="108" y="92" width="7" height="7" fill="#FFFF00"/>
+  <rect x="140" y="92" width="7" height="7" fill="#FFFF00"/>
+  <rect x="108" y="100" width="7" height="7" fill="#FFFF00"/>
+  <rect x="140" y="100" width="7" height="7" fill="#FFFF00"/>
+  <rect x="108" y="108" width="7" height="7" fill="#FFFF00"/>
+  <rect x="140" y="108" width="7" height="7" fill="#FFFF00"/>
+  <rect x="116" y="116" width="7" height="7" fill="#FFFF00"/>
+  <rect x="124" y="116" width="7" height="7" fill="#FFFF00"/>
+  <rect x="132" y="116" width="7" height="7" fill="#FFFF00"/>
+  <!-- F: x_base=156 -->
+  <rect x="156" y="68" width="7" height="7" fill="#FFFF00"/>
+  <rect x="164" y="68" width="7" height="7" fill="#FFFF00"/>
+  <rect x="172" y="68" width="7" height="7" fill="#FFFF00"/>
+  <rect x="180" y="68" width="7" height="7" fill="#FFFF00"/>
+  <rect x="188" y="68" width="7" height="7" fill="#FFFF00"/>
+  <rect x="156" y="76" width="7" height="7" fill="#FFFF00"/>
+  <rect x="156" y="84" width="7" height="7" fill="#FFFF00"/>
+  <rect x="156" y="92" width="7" height="7" fill="#FFFF00"/>
+  <rect x="164" y="92" width="7" height="7" fill="#FFFF00"/>
+  <rect x="172" y="92" width="7" height="7" fill="#FFFF00"/>
+  <rect x="180" y="92" width="7" height="7" fill="#FFFF00"/>
+  <rect x="156" y="100" width="7" height="7" fill="#FFFF00"/>
+  <rect x="156" y="108" width="7" height="7" fill="#FFFF00"/>
+  <rect x="156" y="116" width="7" height="7" fill="#FFFF00"/>
+  <!-- Rectangular dots below letters -->
+  <rect x="78" y="138" width="12" height="7" fill="#FFFF00"/>
+  <rect x="98" y="138" width="12" height="7" fill="#FFFF00"/>
+  <rect x="122" y="138" width="12" height="7" fill="#FFFF00"/>
+  <rect x="146" y="138" width="12" height="7" fill="#FFFF00"/>
+  <rect x="166" y="138" width="12" height="7" fill="#FFFF00"/>
+</svg>
