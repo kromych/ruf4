@@ -21,6 +21,9 @@ This is built in Rust on the TUI framework derived from
 [Microsoft Edit](https://github.com/microsoft/edit). It is an immediate mode TUI,
 very small and just enough.
 
+Runs on Linux, macOS, and Windows. [Here](./ReleaseFlow.md) are the gory details and
+notes on builds amd releases.
+
 Runs on Linux, macOS, and Windows.
 
 ## Keyboard shortcuts
