@@ -226,7 +226,6 @@ Signing is skipped when secrets are not configured (PRs, forks without credentia
 | Linux | x86_64 | Supported |
 | Linux | aarch64 | Supported |
 | macOS | aarch64 (Apple Silicon) | Supported |
-| macOS | x86_64 (Intel) | Supported |
 | Windows | x86_64 | Supported |
 | Windows | aarch64 (ARM64) | Supported |
 
