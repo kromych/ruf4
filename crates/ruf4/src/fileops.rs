@@ -106,14 +106,49 @@ pub fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
+/// Resolve `path` to an absolute form even if it doesn't exist yet:
+/// canonicalize the longest existing prefix, then append the rest.
+fn normalize_against_existing(path: &Path) -> std::io::Result<PathBuf> {
+    if let Ok(p) = fs::canonicalize(path) {
+        return Ok(p);
+    }
+    // Walk up until we find an ancestor that exists.
+    let mut tail = Vec::new();
+    let mut cur = path.to_path_buf();
+    loop {
+        if let Ok(base) = fs::canonicalize(&cur) {
+            let mut result = base;
+            for comp in tail.into_iter().rev() {
+                result.push(comp);
+            }
+            return Ok(result);
+        }
+        match cur.file_name() {
+            Some(name) => {
+                tail.push(name.to_os_string());
+                cur.pop();
+            }
+            None => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "cannot resolve path",
+                ));
+            }
+        }
+    }
+}
+
 pub fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
-    if let (Ok(cs), Ok(cd)) = (fs::canonicalize(src), fs::canonicalize(dst))
-        && cd.starts_with(&cs)
-    {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "cannot copy directory into itself",
-        ));
+    // Detect copy-into-self even when dst doesn't exist yet: canonicalize
+    // dst's nearest existing ancestor and append the remaining components.
+    if let Ok(cs) = fs::canonicalize(src) {
+        let cd = normalize_against_existing(dst)?;
+        if cd.starts_with(&cs) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "cannot copy directory into itself",
+            ));
+        }
     }
 
     fs::create_dir_all(dst)?;
