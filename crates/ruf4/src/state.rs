@@ -155,6 +155,7 @@ pub struct State {
     pub quit: bool,
     pub command_line: String,
     pub command_line_active: bool,
+    pub cmd_cursor: usize,
     pub dialog: Dialog,
     pub menu_active: bool,
     pub want_menu_focus: bool,
@@ -164,6 +165,7 @@ pub struct State {
     pub preview_scroll: usize,
     pub preview_path: Option<PathBuf>,
     pub alt_search: String,
+    pub input_cursor: usize, // cursor position (char index) in text-input dialogs
     pub dir_history: Vec<PathBuf>,
     pub cmd_history: Vec<String>,
     last_click: Option<(Instant, Point)>,
@@ -187,6 +189,7 @@ impl State {
             quit: false,
             command_line: String::new(),
             command_line_active: false,
+            cmd_cursor: 0,
             dialog: Dialog::None,
             menu_active: false,
             want_menu_focus: false,
@@ -199,6 +202,7 @@ impl State {
             preview_scroll: 0,
             preview_path: None,
             alt_search: String::new(),
+            input_cursor: 0,
             dir_history: Vec::new(),
             cmd_history: Vec::new(),
             last_click: None,
@@ -224,6 +228,7 @@ impl State {
             quit: false,
             command_line: String::new(),
             command_line_active: false,
+            cmd_cursor: 0,
             dialog: Dialog::None,
             menu_active: false,
             want_menu_focus: false,
@@ -236,6 +241,7 @@ impl State {
             preview_scroll: 0,
             preview_path: None,
             alt_search: String::new(),
+            input_cursor: 0,
             dir_history: Vec::new(),
             cmd_history: Vec::new(),
             last_click: None,
@@ -343,6 +349,7 @@ impl State {
     pub fn open_copy_dialog(&mut self) {
         if let Some(files) = self.require_selection() {
             let dest = self.inactive_panel().path.to_string_lossy().into_owned();
+            self.input_cursor = dest.chars().count();
             self.dialog = Dialog::Copy { files, dest };
         }
     }
@@ -350,6 +357,7 @@ impl State {
     pub fn open_move_dialog(&mut self) {
         if let Some(files) = self.require_selection() {
             let dest = self.inactive_panel().path.to_string_lossy().into_owned();
+            self.input_cursor = dest.chars().count();
             self.dialog = Dialog::Move { files, dest };
         }
     }
@@ -366,9 +374,9 @@ impl State {
             };
             return;
         }
-        self.dialog = Dialog::Rename {
-            name: entry.name.clone(),
-        };
+        let name = entry.name.clone();
+        self.input_cursor = name.chars().count();
+        self.dialog = Dialog::Rename { name };
     }
 
     pub fn open_delete_dialog(&mut self) {
@@ -461,8 +469,8 @@ impl State {
             self.handle_dialog_input(ev);
             return false;
         }
-        if self.command_line_active {
-            return self.handle_command_line_input(ev);
+        if self.command_line_active && self.handle_command_line_input(ev) {
+            return false;
         }
         if self.menu_active {
             return false;
@@ -481,12 +489,14 @@ impl State {
         self.alt_search.clear();
         match text {
             "+" => {
+                self.input_cursor = 1;
                 self.dialog = Dialog::SelectGroup {
                     pattern: "*".to_string(),
                     select: true,
                 }
             }
             "-" => {
+                self.input_cursor = 1;
                 self.dialog = Dialog::SelectGroup {
                     pattern: "*".to_string(),
                     select: false,
@@ -497,6 +507,7 @@ impl State {
                 self.command_line_active = true;
                 self.command_line.clear();
                 self.command_line.push_str(text);
+                self.cmd_cursor = text.chars().count();
             }
         }
     }
@@ -710,6 +721,7 @@ impl State {
             4 => self.open_copy_dialog(),
             5 => self.open_move_dialog(),
             6 => {
+                self.input_cursor = 0;
                 self.dialog = Dialog::MkDir {
                     name: String::new(),
                 }
@@ -729,27 +741,70 @@ impl State {
 
     fn handle_command_line_input(&mut self, ev: &Input) -> bool {
         match ev {
-            Input::Text(text) => self.command_line.push_str(text),
+            Input::Text(text) => {
+                let cur = self.cmd_cursor;
+                let byte_pos = char_to_byte(&self.command_line, cur);
+                self.command_line.insert_str(byte_pos, text);
+                self.cmd_cursor = cur + text.chars().count();
+                true
+            }
             Input::Keyboard(key) => {
                 let key = *key;
                 if key == vk::ESCAPE {
                     self.command_line_active = false;
                     self.command_line.clear();
+                    self.cmd_cursor = 0;
                 } else if key == vk::RETURN {
                     if !self.command_line.is_empty() {
                         fileops::execute_command(self);
                     }
                     self.command_line_active = false;
-                } else if key == vk::BACK {
-                    self.command_line.pop();
+                    self.cmd_cursor = 0;
+                } else if key == vk::BACK && self.cmd_cursor > 0 {
+                    let cur = self.cmd_cursor;
+                    let byte_pos = char_to_byte(&self.command_line, cur - 1);
+                    let next = self.command_line[byte_pos..]
+                        .char_indices()
+                        .nth(1)
+                        .map_or(self.command_line.len(), |(i, _)| byte_pos + i);
+                    self.command_line.drain(byte_pos..next);
+                    self.cmd_cursor = cur - 1;
                     if self.command_line.is_empty() {
                         self.command_line_active = false;
                     }
+                } else if key == vk::DELETE {
+                    let cur = self.cmd_cursor;
+                    let len = self.command_line.chars().count();
+                    if cur < len {
+                        let byte_pos = char_to_byte(&self.command_line, cur);
+                        let next = self.command_line[byte_pos..]
+                            .char_indices()
+                            .nth(1)
+                            .map_or(self.command_line.len(), |(i, _)| byte_pos + i);
+                        self.command_line.drain(byte_pos..next);
+                        if self.command_line.is_empty() {
+                            self.command_line_active = false;
+                        }
+                    }
+                } else if key == vk::LEFT {
+                    self.cmd_cursor = self.cmd_cursor.saturating_sub(1);
+                } else if key == vk::RIGHT {
+                    let len = self.command_line.chars().count();
+                    if self.cmd_cursor < len {
+                        self.cmd_cursor += 1;
+                    }
+                } else if key == vk::HOME {
+                    self.cmd_cursor = 0;
+                } else if key == vk::END {
+                    self.cmd_cursor = self.command_line.chars().count();
+                } else {
+                    // Tab, Up, Down, function keys — let them fall through.
+                    return false;
                 }
+                true
             }
-            _ => {}
+            _ => false,
         }
-        false
     }
 
     // ── Dialog input ────────────────────────────────────────────────────
@@ -801,9 +856,12 @@ impl State {
     fn handle_text_input_dialog(&mut self, ev: &Input) {
         match ev {
             Input::Text(text) => {
+                let cur = self.input_cursor;
                 if let Some(field) = self.dialog_text_field() {
-                    field.push_str(text);
+                    let byte_pos = char_to_byte(field, cur);
+                    field.insert_str(byte_pos, text);
                 }
+                self.input_cursor = cur + text.chars().count();
             }
             Input::Keyboard(key) => {
                 let key = *key;
@@ -811,10 +869,43 @@ impl State {
                     self.dialog = Dialog::None;
                 } else if key == vk::RETURN {
                     self.commit_text_dialog();
-                } else if key == vk::BACK
-                    && let Some(field) = self.dialog_text_field()
-                {
-                    field.pop();
+                } else if key == vk::BACK && self.input_cursor > 0 {
+                    let cur = self.input_cursor;
+                    if let Some(field) = self.dialog_text_field() {
+                        let byte_pos = char_to_byte(field, cur - 1);
+                        let next = field[byte_pos..]
+                            .char_indices()
+                            .nth(1)
+                            .map_or(field.len(), |(i, _)| byte_pos + i);
+                        field.drain(byte_pos..next);
+                    }
+                    self.input_cursor = cur - 1;
+                } else if key == vk::DELETE {
+                    let cur = self.input_cursor;
+                    let len = self.dialog_text_field().map_or(0, |f| f.chars().count());
+                    if cur < len
+                        && let Some(field) = self.dialog_text_field()
+                    {
+                        let byte_pos = char_to_byte(field, cur);
+                        let next = field[byte_pos..]
+                            .char_indices()
+                            .nth(1)
+                            .map_or(field.len(), |(i, _)| byte_pos + i);
+                        field.drain(byte_pos..next);
+                    }
+                } else if key == vk::LEFT {
+                    self.input_cursor = self.input_cursor.saturating_sub(1);
+                } else if key == vk::RIGHT {
+                    let cur = self.input_cursor;
+                    let len = self.dialog_text_field().map_or(0, |f| f.chars().count());
+                    if cur < len {
+                        self.input_cursor = cur + 1;
+                    }
+                } else if key == vk::HOME {
+                    self.input_cursor = 0;
+                } else if key == vk::END {
+                    let len = self.dialog_text_field().map_or(0, |f| f.chars().count());
+                    self.input_cursor = len;
                 }
             }
             _ => {}
@@ -1109,6 +1200,7 @@ impl State {
                 if let Dialog::CmdHistory { entries, cursor } = &self.dialog {
                     let cmd = entries[*cursor].clone();
                     self.dialog = Dialog::None;
+                    self.cmd_cursor = cmd.chars().count();
                     self.command_line = cmd;
                     self.command_line_active = true;
                 }
@@ -1131,6 +1223,7 @@ impl State {
                 if is_double {
                     let cmd = entries[idx].clone();
                     self.dialog = Dialog::None;
+                    self.cmd_cursor = cmd.chars().count();
                     self.command_line = cmd;
                     self.command_line_active = true;
                 }
@@ -1229,6 +1322,7 @@ impl State {
             "F5" => self.open_copy_dialog(),
             "F6" => self.open_move_dialog(),
             "F7" => {
+                self.input_cursor = 0;
                 self.dialog = Dialog::MkDir {
                     name: String::new(),
                 };
@@ -1324,6 +1418,11 @@ impl State {
 }
 
 // ── Shared helpers ─────────────────────────────────────────────────────────
+
+/// Convert a char index to a byte index in a string.
+fn char_to_byte(s: &str, char_idx: usize) -> usize {
+    s.char_indices().nth(char_idx).map_or(s.len(), |(i, _)| i)
+}
 
 fn push_recent<T: PartialEq>(list: &mut Vec<T>, item: T) {
     list.retain(|x| x != &item);
