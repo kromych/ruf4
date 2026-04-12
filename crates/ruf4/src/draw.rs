@@ -485,8 +485,7 @@ fn draw_single_panel(
             let ellipsis_w = 1; // … is 1 column wide
             let avail = name_w.saturating_sub(ext_w + ellipsis_w);
             let truncated_stem = truncate_to_display_width(stem, avail);
-            let display_name =
-                arena_format!(ctx.arena(), "{truncated_stem}{ellipsis}{ext}");
+            let display_name = arena_format!(ctx.arena(), "{truncated_stem}{ellipsis}{ext}");
             let display_w = str_display_width(&display_name);
             let pad = name_w.saturating_sub(display_w);
             arena_format!(
