@@ -1208,7 +1208,7 @@ fn draw_shell_output_dialog(
     let w = (size.width - 4).max(20);
     let h = (size.height - 4).max(8);
 
-    let title = arena_format!(ctx.arena(), "$ {command} - Esc/Enter=Close");
+    let title = arena_format!(ctx.arena(), "$ {command} - Ctrl+C=Copy  Esc/Enter=Close");
     ctx.modal_begin("shell-dialog", &title);
     ctx.attr_intrinsic_size(Size {
         width: w,
