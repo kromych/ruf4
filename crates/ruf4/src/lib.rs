@@ -5,6 +5,7 @@
 //!
 //! Built on the TUI framework derived from Microsoft Edit.
 
+pub mod action;
 pub mod draw;
 pub mod fileops;
 pub mod lsh;
@@ -13,3 +14,4 @@ pub mod platform;
 pub mod preview;
 pub mod settings;
 pub mod state;
+pub mod theme;

@@ -42,11 +42,11 @@ impl InputKey {
         self.0
     }
 
-    pub(crate) const fn key(&self) -> Self {
+    pub const fn key(&self) -> Self {
         Self(self.0 & 0x00FFFFFF)
     }
 
-    pub(crate) const fn modifiers(&self) -> InputKeyMod {
+    pub const fn modifiers(&self) -> InputKeyMod {
         InputKeyMod(self.0 & 0xFF000000)
     }
 
@@ -69,7 +69,7 @@ impl InputKeyMod {
         Self(v)
     }
 
-    pub(crate) const fn contains(&self, modifier: Self) -> bool {
+    pub const fn contains(&self, modifier: Self) -> bool {
         (self.0 & modifier.0) != 0
     }
 }

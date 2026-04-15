@@ -9,7 +9,6 @@ use std::process::ExitCode;
 
 use ruf4::draw;
 use ruf4::state;
-use ruf4_tui::framebuffer::IndexedColor;
 use ruf4_tui::helpers::*;
 use ruf4_tui::input;
 use ruf4_tui::tui::Tui;
@@ -66,9 +65,9 @@ fn run() -> std::io::Result<()> {
     let mut vt_parser = vt::Parser::new();
     let mut input_parser = input::Parser::new();
     let mut tui = Tui::new()?;
-    tui.set_floater_default_bg(tui.indexed(IndexedColor::Cyan));
-    tui.set_floater_default_fg(tui.indexed(IndexedColor::Black));
     let mut state = state::State::new();
+    tui.set_floater_default_bg(tui.indexed(state.theme.floater_bg));
+    tui.set_floater_default_fg(tui.indexed(state.theme.floater_fg));
 
     sys::inject_window_size_into_stdin();
 
