@@ -214,6 +214,35 @@ pub fn disk_free(_path: &Path) -> Option<u64> {
 
 // ── File properties ────────────────────────────────────────────────────────
 
+/// Detect whether a file should be considered hidden.
+/// On Unix: dot-prefix. On Windows: FILE_ATTRIBUTE_HIDDEN or FILE_ATTRIBUTE_SYSTEM.
+#[cfg(unix)]
+pub fn is_hidden(name: &str, _metadata: Option<&std::fs::Metadata>) -> bool {
+    name.starts_with('.')
+}
+
+#[cfg(windows)]
+pub fn is_hidden(name: &str, metadata: Option<&std::fs::Metadata>) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
+    const FILE_ATTRIBUTE_SYSTEM: u32 = 0x4;
+    if name.starts_with('.') {
+        return true;
+    }
+    if let Some(m) = metadata {
+        let attrs = m.file_attributes();
+        if attrs & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM) != 0 {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(not(any(unix, windows)))]
+pub fn is_hidden(name: &str, _metadata: Option<&std::fs::Metadata>) -> bool {
+    name.starts_with('.')
+}
+
 /// Detect whether a file is a hard link and/or executable.
 /// Returns `(is_hardlink, is_executable)`.
 #[cfg(unix)]
