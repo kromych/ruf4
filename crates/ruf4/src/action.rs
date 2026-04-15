@@ -223,7 +223,7 @@ pub fn default_bindings() -> Vec<Binding> {
             action: Action::ToggleSelect,
         },
         Binding {
-            key: kbmod::SHIFT | vk::SPACE,
+            key: kbmod::CTRL | vk::SPACE,
             action: Action::ToggleSelect,
         },
         Binding {
