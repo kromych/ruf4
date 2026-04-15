@@ -267,6 +267,36 @@ fn draw_panels(ctx: &mut Context, state: &State, theme: &Theme, size: Size) {
     ctx.table_end();
 }
 
+// ── Scrollbar helper ──────────────────────────────────────────────────────
+
+const SB_THUMB: &str = "\u{2588}"; // █
+const SB_TRACK: &str = "\u{2502}"; // │
+
+/// Compute scrollbar thumb range for a scrollable region.
+/// Returns `None` when no scrollbar is needed (all content fits).
+/// Otherwise returns `(thumb_start_row, thumb_end_row)` within `0..visible`.
+fn scrollbar_thumb(total: usize, visible: usize, scroll: usize) -> Option<(usize, usize)> {
+    if total <= visible {
+        return None;
+    }
+    let ts = scroll * visible / total;
+    let te = ((scroll + visible) * visible / total)
+        .max(ts + 1)
+        .min(visible);
+    Some((ts, te))
+}
+
+/// Return the scrollbar character for a given row in the visible area.
+fn sb_char(thumb: Option<(usize, usize)>, row: usize) -> &'static str {
+    match thumb {
+        Some((ts, te)) if row >= ts && row < te => SB_THUMB,
+        Some(_) => SB_TRACK,
+        None => "",
+    }
+}
+
+// ── Display-width helpers ─────────────────────────────────────────────────
+
 /// Compute the display (column) width of a string, accounting for
 /// multi-byte characters and wide (CJK) characters.
 fn str_display_width(s: &str) -> usize {
@@ -368,15 +398,29 @@ fn draw_single_panel(
 
     let start = panel.scroll_offset;
     let end = (start + visible_height).min(panel.entries.len());
+    let thumb = scrollbar_thumb(panel.entries.len(), visible_height, start);
+    // Reserve 2 columns for " █" when scrollbar is active.
+    let sb_cols: CoordType = if thumb.is_some() { 2 } else { 0 };
 
     for i in start..end {
         let entry = &panel.entries[i];
         let is_cursor = i == panel.cursor;
+        let row = i - start;
 
         ctx.next_block_id_mixin(i as u64);
+        if thumb.is_some() {
+            ctx.table_begin("entry-row");
+            ctx.attr_intrinsic_size(Size {
+                width: width - 2,
+                height: 1,
+            });
+            ctx.table_set_columns(&[width - 2 - sb_cols, sb_cols]);
+            ctx.table_next_row();
+        }
+
         ctx.block_begin("entry");
         ctx.attr_intrinsic_size(Size {
-            width: width - 2,
+            width: width - 2 - sb_cols,
             height: 1,
         });
 
@@ -403,7 +447,7 @@ fn draw_single_panel(
 
         let date_col = 16; // "2026-04-09 12:34"
         let size_col = 7;
-        let name_w = (width - 2 - date_col - size_col - 2).max(4) as usize;
+        let name_w = (width - 2 - date_col - size_col - 2 - sb_cols).max(4) as usize;
 
         let size_str = entry.display_size();
         let date_str = entry.display_date();
@@ -420,17 +464,15 @@ fn draw_single_panel(
                 date_str,
             )
         } else {
-            // Truncate the stem, keep the extension visible.
-            // "very_long_name.txt" -> "very_lo….txt"
             let (stem, ext) = match entry.name.rfind('.') {
                 Some(dot) if dot > 0 && dot < entry.name.len() - 1 => {
-                    (&entry.name[..dot], &entry.name[dot..]) // ext includes '.'
+                    (&entry.name[..dot], &entry.name[dot..])
                 }
                 _ => (entry.name.as_str(), ""),
             };
-            let ellipsis = "\u{2026}"; // …
+            let ellipsis = "\u{2026}";
             let ext_w = str_display_width(ext);
-            let ellipsis_w = 1; // … is 1 column wide
+            let ellipsis_w = 1;
             let avail = name_w.saturating_sub(ext_w + ellipsis_w);
             let truncated_stem = truncate_to_display_width(stem, avail);
             let display_name = arena_format!(ctx.arena(), "{truncated_stem}{ellipsis}{ext}");
@@ -446,18 +488,61 @@ fn draw_single_panel(
             )
         };
         ctx.label("entry-text", &line);
-
         ctx.block_end();
+
+        if let Some(t) = thumb {
+            ctx.block_begin("entry-sb");
+            ctx.attr_intrinsic_size(Size {
+                width: sb_cols,
+                height: 1,
+            });
+            ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::White));
+            let sb = sb_char(Some(t), row);
+            let text = arena_format!(ctx.arena(), " {sb}");
+            ctx.label("sb-char", &text);
+            ctx.block_end();
+            ctx.table_end();
+        }
     }
 
     let drawn = end - start;
     if drawn < visible_height {
-        ctx.block_begin("filler");
-        ctx.attr_intrinsic_size(Size {
-            width: width - 2,
-            height: (visible_height - drawn) as CoordType,
-        });
-        ctx.block_end();
+        for row in drawn..visible_height {
+            ctx.next_block_id_mixin((start + row) as u64 + 0x10000);
+            if let Some(t) = thumb {
+                ctx.table_begin("filler-row");
+                ctx.attr_intrinsic_size(Size {
+                    width: width - 2,
+                    height: 1,
+                });
+                ctx.table_set_columns(&[width - 2 - sb_cols, sb_cols]);
+                ctx.table_next_row();
+                ctx.block_begin("filler-content");
+                ctx.attr_intrinsic_size(Size {
+                    width: width - 2 - sb_cols,
+                    height: 1,
+                });
+                ctx.block_end();
+                ctx.block_begin("filler-sb");
+                ctx.attr_intrinsic_size(Size {
+                    width: sb_cols,
+                    height: 1,
+                });
+                ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::White));
+                let sb = sb_char(Some(t), row);
+                let text = arena_format!(ctx.arena(), " {sb}");
+                ctx.label("sb-char", &text);
+                ctx.block_end();
+                ctx.table_end();
+            } else {
+                ctx.block_begin("filler-row");
+                ctx.attr_intrinsic_size(Size {
+                    width: width - 2,
+                    height: 1,
+                });
+                ctx.block_end();
+            }
+        }
     }
 
     {
@@ -551,10 +636,18 @@ fn draw_preview_panel(
     let max_scroll = lines.len().saturating_sub(visible_height);
     let scroll = state.preview_scroll.min(max_scroll);
     let end = (scroll + visible_height).min(lines.len());
+    let thumb = scrollbar_thumb(lines.len(), visible_height, scroll);
+    let sb_cols: CoordType = if thumb.is_some() { 2 } else { 0 };
 
     let highlights = &state.preview.highlights;
 
-    for (i, line) in lines.iter().enumerate().skip(scroll).take(end - scroll) {
+    for (row, (i, line)) in lines
+        .iter()
+        .enumerate()
+        .skip(scroll)
+        .take(end - scroll)
+        .enumerate()
+    {
         ctx.next_block_id_mixin(i as u64);
         ctx.block_begin("preview-line");
         ctx.attr_intrinsic_size(Size {
@@ -563,16 +656,21 @@ fn draw_preview_panel(
         });
         ctx.attr_foreground_rgba(ctx.indexed(theme.preview_text));
 
-        let max_w = (width - 2).max(0) as usize;
+        let max_w = (width - 2 - sb_cols).max(0) as usize;
         let display = if line.len() > max_w {
             &line[..line.floor_char_boundary(max_w)]
         } else {
             line
         };
 
+        let sb_suffix = sb_char(thumb, row);
         let hl = highlights.get(i);
         if hl.is_some_and(|h| !h.is_empty()) {
-            draw_highlighted_line(ctx, theme, display, hl.unwrap());
+            draw_highlighted_line(ctx, theme, display, hl.unwrap(), sb_suffix);
+        } else if !sb_suffix.is_empty() {
+            let pad = max_w - str_display_width(display);
+            let text = arena_format!(ctx.arena(), "{display}{:pad$} {sb_suffix}", "");
+            ctx.label("preview-text", &text);
         } else {
             ctx.label("preview-text", display);
         }
@@ -580,19 +678,33 @@ fn draw_preview_panel(
     }
 
     let drawn = end - scroll;
-    if drawn < visible_height {
-        ctx.block_begin("preview-filler");
+    for row in drawn..visible_height {
+        ctx.next_block_id_mixin((scroll + row) as u64 + 0x10000);
+        ctx.block_begin("preview-filler-row");
         ctx.attr_intrinsic_size(Size {
             width: width - 2,
-            height: (visible_height - drawn) as CoordType,
+            height: 1,
         });
+        if let Some(t) = thumb {
+            let sb = sb_char(Some(t), row);
+            let pad = (width - 2 - sb_cols) as usize;
+            let text = arena_format!(ctx.arena(), "{:pad$} {sb}", "");
+            ctx.attr_foreground_rgba(ctx.indexed(theme.preview_text));
+            ctx.label("preview-filler-text", &text);
+        }
         ctx.block_end();
     }
 
     ctx.block_end();
 }
 
-fn draw_highlighted_line(ctx: &mut Context, theme: &Theme, line: &str, spans: &[HighlightSpan]) {
+fn draw_highlighted_line(
+    ctx: &mut Context,
+    theme: &Theme,
+    line: &str,
+    spans: &[HighlightSpan],
+    sb_suffix: &str,
+) {
     ctx.styled_label_begin("preview-text");
 
     let default_fg = ctx.indexed(theme.preview_text);
@@ -629,6 +741,12 @@ fn draw_highlighted_line(ctx: &mut Context, theme: &Theme, line: &str, spans: &[
     if pos < line.len() {
         ctx.styled_label_set_foreground(default_fg);
         ctx.styled_label_add_text(&line[line.ceil_char_boundary(pos)..]);
+    }
+
+    if !sb_suffix.is_empty() {
+        ctx.styled_label_set_foreground(default_fg);
+        ctx.styled_label_add_text(" ");
+        ctx.styled_label_add_text(sb_suffix);
     }
 
     ctx.styled_label_end();
@@ -1173,6 +1291,10 @@ fn draw_help_dialog(
     let w = dialog_begin(ctx, theme, &spec, &caption, h, size);
     {
         let visible = content_h as usize;
+        let thumb = scrollbar_thumb(help_text.len(), visible, scroll);
+        let line_w = if thumb.is_some() { w } else { w - 4 };
+        let sb_w: CoordType = if thumb.is_some() { 2 } else { 0 };
+        let content_w = (line_w - sb_w) as usize;
         for i in 0..visible {
             let idx = scroll + i;
             let (key, desc) = if idx < help_text.len() {
@@ -1183,15 +1305,29 @@ fn draw_help_dialog(
             ctx.next_block_id_mixin(i as u64);
             ctx.block_begin("help-line");
             ctx.attr_intrinsic_size(Size {
-                width: w - 4,
+                width: line_w,
                 height: 1,
             });
             if key.is_empty() {
-                ctx.label("help-blank", "");
+                if let Some(t) = thumb {
+                    let sb = sb_char(Some(t), i);
+                    let line = arena_format!(ctx.arena(), "{:content_w$} {sb}", "");
+                    ctx.label("help-blank", &line);
+                } else {
+                    ctx.label("help-blank", "");
+                }
             } else {
-                let line =
+                let base =
                     arena_format!(ctx.arena(), "{:<width$}   {}", key, desc, width = key_width);
-                ctx.label("help-text", &line);
+                if let Some(t) = thumb {
+                    let sb = sb_char(Some(t), i);
+                    let display = truncate_to_display_width(&base, content_w);
+                    let pad = content_w - str_display_width(display);
+                    let line = arena_format!(ctx.arena(), "{display}{:pad$} {sb}", "");
+                    ctx.label("help-text", &line);
+                } else {
+                    ctx.label("help-text", &base);
+                }
             }
             ctx.block_end();
         }
@@ -1224,20 +1360,46 @@ fn draw_shell_output_dialog(
         let max_scroll = lines.len().saturating_sub(visible);
         let scroll = scroll.min(max_scroll);
         let end = (scroll + visible).min(lines.len());
+        let thumb = scrollbar_thumb(lines.len(), visible, scroll);
+        let content_w = if thumb.is_some() { w - 5 } else { w - 4 };
 
         for (i, line) in lines[scroll..end].iter().enumerate() {
             ctx.next_block_id_mixin(i as u64);
             ctx.block_begin("out-line");
             ctx.attr_intrinsic_size(Size {
-                width: w - 4,
+                width: if thumb.is_some() { w - 3 } else { w - 4 },
                 height: 1,
             });
             ctx.attr_foreground_rgba(ctx.indexed(theme.dialog_shell_text));
-            ctx.label("out-text", line);
+
+            if thumb.is_some() {
+                let line_display = truncate_to_display_width(line, content_w as usize);
+                let pad = content_w as usize - str_display_width(line_display);
+                let sb = sb_char(thumb, i);
+                let text = arena_format!(ctx.arena(), "{line_display}{:pad$} {sb}", "");
+                ctx.label("out-text", &text);
+            } else {
+                ctx.label("out-text", line);
+            }
             ctx.block_end();
         }
 
-        if lines.len() > visible {
+        // Fill remaining visible rows with scrollbar track.
+        if thumb.is_some() {
+            for i in (end - scroll)..visible {
+                ctx.next_block_id_mixin((i + lines.len()) as u64);
+                ctx.block_begin("out-line");
+                ctx.attr_intrinsic_size(Size {
+                    width: w - 3,
+                    height: 1,
+                });
+                ctx.attr_foreground_rgba(ctx.indexed(theme.dialog_shell_text));
+                let sb = sb_char(thumb, i);
+                let text = arena_format!(ctx.arena(), "{:pad$} {sb}", "", pad = content_w as usize);
+                ctx.label("out-text", &text);
+                ctx.block_end();
+            }
+
             let indicator =
                 arena_format!(ctx.arena(), " [{}-{} of {}]", scroll + 1, end, lines.len());
             ctx.attr_foreground_rgba(ctx.indexed(theme.dialog_shell_scroll_info));
@@ -1322,21 +1484,75 @@ fn draw_list_dialog(
     dialog_prompt(ctx, "prompt", prompt);
 
     let max_show = (h.min(size.height - 4) - 3).max(0) as usize;
-    for (i, entry) in entries.iter().enumerate().take(max_show) {
+    // Derive scroll offset from cursor so the cursor is always visible.
+    let scroll = if cursor >= max_show {
+        cursor - max_show + 1
+    } else {
+        0
+    };
+    let end = (scroll + max_show).min(entries.len());
+    let thumb = scrollbar_thumb(entries.len(), max_show, scroll);
+    let line_w = if thumb.is_some() { w } else { w - 4 };
+
+    for (row, i) in (scroll..end).enumerate() {
+        let entry = entries[i].as_ref();
         ctx.next_block_id_mixin(i as u64);
-        ctx.block_begin("list-entry");
-        ctx.attr_intrinsic_size(Size {
-            width: w - 4,
-            height: 1,
-        });
-        if i == cursor {
-            ctx.attr_background_rgba(ctx.indexed(theme.dialog_list_cursor_bg));
-            ctx.attr_foreground_rgba(ctx.indexed(theme.dialog_list_cursor_fg));
+
+        if let Some(t) = thumb {
+            let sb_cols: CoordType = 2;
+            let entry_w = line_w - sb_cols;
+            ctx.table_begin("list-row");
+            ctx.attr_intrinsic_size(Size {
+                width: line_w,
+                height: 1,
+            });
+            ctx.table_set_columns(&[entry_w, sb_cols]);
+            ctx.table_next_row();
+
+            ctx.block_begin("list-entry");
+            ctx.attr_intrinsic_size(Size {
+                width: entry_w,
+                height: 1,
+            });
+            if i == cursor {
+                ctx.attr_background_rgba(ctx.indexed(theme.dialog_list_cursor_bg));
+                ctx.attr_foreground_rgba(ctx.indexed(theme.dialog_list_cursor_fg));
+            } else {
+                ctx.attr_foreground_rgba(ctx.indexed(theme.dialog_list_fg));
+            }
+            let content_w = entry_w as usize;
+            let display = truncate_to_display_width(entry, content_w);
+            let pad = content_w - str_display_width(display);
+            let text = arena_format!(ctx.arena(), "{display}{:pad$}", "");
+            ctx.label("list-name", &text);
+            ctx.block_end();
+
+            ctx.block_begin("list-sb");
+            ctx.attr_intrinsic_size(Size {
+                width: sb_cols,
+                height: 1,
+            });
+            let sb = sb_char(Some(t), row);
+            let text = arena_format!(ctx.arena(), " {sb}");
+            ctx.label("sb-char", &text);
+            ctx.block_end();
+
+            ctx.table_end();
         } else {
-            ctx.attr_foreground_rgba(ctx.indexed(theme.dialog_list_fg));
+            ctx.block_begin("list-entry");
+            ctx.attr_intrinsic_size(Size {
+                width: line_w,
+                height: 1,
+            });
+            if i == cursor {
+                ctx.attr_background_rgba(ctx.indexed(theme.dialog_list_cursor_bg));
+                ctx.attr_foreground_rgba(ctx.indexed(theme.dialog_list_cursor_fg));
+            } else {
+                ctx.attr_foreground_rgba(ctx.indexed(theme.dialog_list_fg));
+            }
+            ctx.label("list-name", entry);
+            ctx.block_end();
         }
-        ctx.label("list-name", entry.as_ref());
-        ctx.block_end();
     }
 
     dialog_end(ctx);
