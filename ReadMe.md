@@ -69,7 +69,7 @@ If you are a developer, [here](./ReleaseFlow.md) are the gory details and notes 
 | Home / End | Jump to first / last entry |
 | Enter | Enter directory or open file |
 | Tab | Switch active panel |
-| Backspace | Go to parent directory (in command line) |
+| Backspace | Go to parent directory |
 | Alt+letters | Quick search: jump to file by name prefix |
 
 ### File operations
@@ -80,8 +80,7 @@ If you are a developer, [here](./ReleaseFlow.md) are the gory details and notes 
 | F5 | Copy |
 | F6 | Move |
 | F7 | Make directory |
-| F8 | Delete |
-| Delete | Delete |
+| F8 / Delete | Delete |
 | Ctrl+G | Change root / drive |
 | Ctrl+D | Directory history |
 | Ctrl+E | Command history |
@@ -91,7 +90,7 @@ If you are a developer, [here](./ReleaseFlow.md) are the gory details and notes 
 
 | Key | Action |
 |-----|--------|
-| Insert / Shift+Space | Toggle selection on current entry |
+| Ins / Ctrl+Space | Toggle selection and move down |
 | + | Select group (glob pattern) |
 | - | Deselect group (glob pattern) |
 | * | Invert selection |
@@ -101,7 +100,7 @@ If you are a developer, [here](./ReleaseFlow.md) are the gory details and notes 
 
 | Key | Action |
 |-----|--------|
-| Ctrl+Q | Toggle quick view panel |
+| F3 / Ctrl+Q | Toggle quick view panel |
 | Ctrl+H | Toggle hidden files |
 | Ctrl+F3 | Sort by name |
 | Ctrl+F4 | Sort by extension |
@@ -114,10 +113,26 @@ If you are a developer, [here](./ReleaseFlow.md) are the gory details and notes 
 |-----|--------|
 | F1 | Help screen |
 | F2 | Save settings |
-| F3 / Ctrl+Q | Toggle quick view panel |
 | F9 | Focus menubar |
 | F10 | Quit (with confirmation) |
+| F12 | Reopen last shell output |
 | Any letter | Activate command line |
+
+### macOS alternatives
+
+On macOS, F-keys are mapped to system functions by default (brightness,
+Mission Control, media, volume). These Ctrl shortcuts work without Fn:
+
+| Key | Action |
+|-----|--------|
+| Ctrl+S | Save settings (F2) |
+| Ctrl+Q | Toggle quick view (F3) |
+| Ctrl+P | Rename (F4) |
+| Ctrl+O | Copy (F5) |
+| Ctrl+K | Move (F6) |
+| Ctrl+N | Make directory (F7) |
+| Ctrl+X | Delete (F8) |
+| Ctrl+W | Quit (F10) |
 
 ### Command line
 
@@ -129,6 +144,16 @@ Commands run in the active panel's directory.
 | Enter | Execute command |
 | Escape | Cancel |
 | Backspace | Delete character |
+
+### Shell output
+
+After running a command, the output is shown in a scrollable dialog.
+Press F12 to reopen the last output at any time.
+
+| Key | Action |
+|-----|--------|
+| Ctrl+C | Copy output to clipboard |
+| Esc / Enter | Close |
 
 ### Dialogs
 
