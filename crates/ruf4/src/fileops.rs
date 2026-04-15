@@ -288,6 +288,7 @@ pub fn execute_command(state: &mut State) {
 
     match platform::run_command(&cmd, &cwd) {
         Ok((text, _code)) => {
+            state.last_output = Some((cmd.clone(), text.clone()));
             state.dialog = Dialog::ShellOutput {
                 command: cmd,
                 output: text,

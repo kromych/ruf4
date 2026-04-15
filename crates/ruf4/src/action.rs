@@ -48,6 +48,7 @@ pub enum Action {
     ChooseSort,
 
     // App
+    LastOutput,
     Help,
     SaveSettings,
     Refresh,
@@ -133,6 +134,10 @@ pub fn default_bindings() -> Vec<Binding> {
         Binding {
             key: vk::F10,
             action: Action::Quit,
+        },
+        Binding {
+            key: vk::F12,
+            action: Action::LastOutput,
         },
         // Ctrl combinations (cross-platform)
         Binding {
@@ -312,6 +317,8 @@ pub fn key_display_name(key: InputKey) -> String {
         k if k == vk::F8 => "F8",
         k if k == vk::F9 => "F9",
         k if k == vk::F10 => "F10",
+        k if k == vk::F11 => "F11",
+        k if k == vk::F12 => "F12",
         k if k == vk::UP => "Up",
         k if k == vk::DOWN => "Down",
         k if k == vk::LEFT => "Left",
@@ -396,6 +403,7 @@ pub fn action_label(action: Action) -> &'static str {
         Action::ChangeRoot => "Change root",
         Action::DirHistory => "Directory history",
         Action::CmdHistory => "Command history",
+        Action::LastOutput => "Last output",
     }
 }
 
@@ -439,6 +447,7 @@ pub fn action_str(action: Action) -> &'static str {
         Action::CmdHistory => "cmd_history",
         Action::FocusMenu => "focus_menu",
         Action::Quit => "quit",
+        Action::LastOutput => "last_output",
     }
 }
 
@@ -480,6 +489,7 @@ pub fn parse_action(s: &str) -> Option<Action> {
         "cmd_history" => Action::CmdHistory,
         "focus_menu" => Action::FocusMenu,
         "quit" => Action::Quit,
+        "last_output" => Action::LastOutput,
         _ => return None,
     })
 }
@@ -518,6 +528,8 @@ pub fn parse_key_name(s: &str) -> Option<InputKey> {
         "F8" => vk::F8,
         "F9" => vk::F9,
         "F10" => vk::F10,
+        "F11" => vk::F11,
+        "F12" => vk::F12,
         "Up" => vk::UP,
         "Down" => vk::DOWN,
         "Left" => vk::LEFT,
@@ -581,6 +593,7 @@ pub fn build_help_text(bindings: &[Binding]) -> Vec<(String, &'static str, Actio
         Some(Action::Delete),
         Some(Action::FocusMenu),
         Some(Action::Quit),
+        Some(Action::LastOutput),
         None, // separator
         Some(Action::CursorUp),
         Some(Action::CursorDown),
