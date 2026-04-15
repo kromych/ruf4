@@ -94,45 +94,141 @@ pub struct Binding {
 pub fn default_bindings() -> Vec<Binding> {
     let mut bindings = vec![
         // Function keys (on macOS these need Fn; Ctrl alternatives below).
-        Binding { key: vk::F1,  action: Action::Help },
-        Binding { key: vk::F2,  action: Action::SaveSettings },
-        Binding { key: vk::F3,  action: Action::ToggleQuickView },
-        Binding { key: vk::F4,  action: Action::Rename },
-        Binding { key: vk::F5,  action: Action::Copy },
-        Binding { key: vk::F6,  action: Action::Move },
-        Binding { key: vk::F7,  action: Action::MkDir },
-        Binding { key: vk::F8,  action: Action::Delete },
-        Binding { key: vk::F9,  action: Action::FocusMenu },
-        Binding { key: vk::F10, action: Action::Quit },
-
+        Binding {
+            key: vk::F1,
+            action: Action::Help,
+        },
+        Binding {
+            key: vk::F2,
+            action: Action::SaveSettings,
+        },
+        Binding {
+            key: vk::F3,
+            action: Action::ToggleQuickView,
+        },
+        Binding {
+            key: vk::F4,
+            action: Action::Rename,
+        },
+        Binding {
+            key: vk::F5,
+            action: Action::Copy,
+        },
+        Binding {
+            key: vk::F6,
+            action: Action::Move,
+        },
+        Binding {
+            key: vk::F7,
+            action: Action::MkDir,
+        },
+        Binding {
+            key: vk::F8,
+            action: Action::Delete,
+        },
+        Binding {
+            key: vk::F9,
+            action: Action::FocusMenu,
+        },
+        Binding {
+            key: vk::F10,
+            action: Action::Quit,
+        },
         // Ctrl combinations (cross-platform)
-        Binding { key: kbmod::CTRL | vk::Q,  action: Action::ToggleQuickView },
-        Binding { key: kbmod::CTRL | vk::G,  action: Action::ChangeRoot },
-        Binding { key: kbmod::CTRL | vk::D,  action: Action::DirHistory },
-        Binding { key: kbmod::CTRL | vk::E,  action: Action::CmdHistory },
-        Binding { key: kbmod::CTRL | vk::R,  action: Action::Refresh },
-        Binding { key: kbmod::CTRL | vk::H,  action: Action::ToggleHidden },
-        Binding { key: kbmod::CTRL | vk::A,  action: Action::SelectAll },
-        Binding { key: kbmod::CTRL | vk::F3, action: Action::SortBy(SortBy::Name) },
-        Binding { key: kbmod::CTRL | vk::F4, action: Action::SortBy(SortBy::Extension) },
-        Binding { key: kbmod::CTRL | vk::F5, action: Action::SortBy(SortBy::Modified) },
-        Binding { key: kbmod::CTRL | vk::F6, action: Action::SortBy(SortBy::Size) },
-
+        Binding {
+            key: kbmod::CTRL | vk::Q,
+            action: Action::ToggleQuickView,
+        },
+        Binding {
+            key: kbmod::CTRL | vk::G,
+            action: Action::ChangeRoot,
+        },
+        Binding {
+            key: kbmod::CTRL | vk::D,
+            action: Action::DirHistory,
+        },
+        Binding {
+            key: kbmod::CTRL | vk::E,
+            action: Action::CmdHistory,
+        },
+        Binding {
+            key: kbmod::CTRL | vk::R,
+            action: Action::Refresh,
+        },
+        Binding {
+            key: kbmod::CTRL | vk::H,
+            action: Action::ToggleHidden,
+        },
+        Binding {
+            key: kbmod::CTRL | vk::A,
+            action: Action::SelectAll,
+        },
+        Binding {
+            key: kbmod::CTRL | vk::F3,
+            action: Action::SortBy(SortBy::Name),
+        },
+        Binding {
+            key: kbmod::CTRL | vk::F4,
+            action: Action::SortBy(SortBy::Extension),
+        },
+        Binding {
+            key: kbmod::CTRL | vk::F5,
+            action: Action::SortBy(SortBy::Modified),
+        },
+        Binding {
+            key: kbmod::CTRL | vk::F6,
+            action: Action::SortBy(SortBy::Size),
+        },
         // Navigation
-        Binding { key: vk::UP,     action: Action::CursorUp },
-        Binding { key: vk::DOWN,   action: Action::CursorDown },
-        Binding { key: vk::PRIOR,  action: Action::PageUp },
-        Binding { key: vk::NEXT,   action: Action::PageDown },
-        Binding { key: vk::HOME,   action: Action::CursorHome },
-        Binding { key: vk::END,    action: Action::CursorEnd },
-        Binding { key: vk::RETURN, action: Action::OpenOrEnter },
-        Binding { key: vk::BACK,   action: Action::ParentDir },
-        Binding { key: vk::TAB,    action: Action::SwitchPanel },
-
+        Binding {
+            key: vk::UP,
+            action: Action::CursorUp,
+        },
+        Binding {
+            key: vk::DOWN,
+            action: Action::CursorDown,
+        },
+        Binding {
+            key: vk::PRIOR,
+            action: Action::PageUp,
+        },
+        Binding {
+            key: vk::NEXT,
+            action: Action::PageDown,
+        },
+        Binding {
+            key: vk::HOME,
+            action: Action::CursorHome,
+        },
+        Binding {
+            key: vk::END,
+            action: Action::CursorEnd,
+        },
+        Binding {
+            key: vk::RETURN,
+            action: Action::OpenOrEnter,
+        },
+        Binding {
+            key: vk::BACK,
+            action: Action::ParentDir,
+        },
+        Binding {
+            key: vk::TAB,
+            action: Action::SwitchPanel,
+        },
         // Selection
-        Binding { key: vk::INSERT,               action: Action::ToggleSelect },
-        Binding { key: kbmod::SHIFT | vk::SPACE,  action: Action::ToggleSelect },
-        Binding { key: vk::DELETE,               action: Action::Delete },
+        Binding {
+            key: vk::INSERT,
+            action: Action::ToggleSelect,
+        },
+        Binding {
+            key: kbmod::CTRL | vk::SPACE,
+            action: Action::ToggleSelect,
+        },
+        Binding {
+            key: vk::DELETE,
+            action: Action::Delete,
+        },
     ];
 
     // macOS: all F-keys are media/system keys by default (brightness,
@@ -140,13 +236,34 @@ pub fn default_bindings() -> Vec<Binding> {
     // alternatives so the core operations work without Fn.
     #[cfg(target_os = "macos")]
     bindings.extend([
-        Binding { key: kbmod::CTRL | vk::S,  action: Action::SaveSettings },
-        Binding { key: kbmod::CTRL | vk::P,  action: Action::Rename },
-        Binding { key: kbmod::CTRL | vk::O,  action: Action::Copy },
-        Binding { key: kbmod::CTRL | vk::K,  action: Action::Move },
-        Binding { key: kbmod::CTRL | vk::N,  action: Action::MkDir },
-        Binding { key: kbmod::CTRL | vk::X,  action: Action::Delete },
-        Binding { key: kbmod::CTRL | vk::W,  action: Action::Quit },
+        Binding {
+            key: kbmod::CTRL | vk::S,
+            action: Action::SaveSettings,
+        },
+        Binding {
+            key: kbmod::CTRL | vk::P,
+            action: Action::Rename,
+        },
+        Binding {
+            key: kbmod::CTRL | vk::O,
+            action: Action::Copy,
+        },
+        Binding {
+            key: kbmod::CTRL | vk::K,
+            action: Action::Move,
+        },
+        Binding {
+            key: kbmod::CTRL | vk::N,
+            action: Action::MkDir,
+        },
+        Binding {
+            key: kbmod::CTRL | vk::X,
+            action: Action::Delete,
+        },
+        Binding {
+            key: kbmod::CTRL | vk::W,
+            action: Action::Quit,
+        },
     ]);
 
     bindings
@@ -185,40 +302,57 @@ pub fn key_display_name(key: InputKey) -> String {
     }
 
     let name: &str = match base {
-        k if k == vk::F1  => "F1",
-        k if k == vk::F2  => "F2",
-        k if k == vk::F3  => "F3",
-        k if k == vk::F4  => "F4",
-        k if k == vk::F5  => "F5",
-        k if k == vk::F6  => "F6",
-        k if k == vk::F7  => "F7",
-        k if k == vk::F8  => "F8",
-        k if k == vk::F9  => "F9",
+        k if k == vk::F1 => "F1",
+        k if k == vk::F2 => "F2",
+        k if k == vk::F3 => "F3",
+        k if k == vk::F4 => "F4",
+        k if k == vk::F5 => "F5",
+        k if k == vk::F6 => "F6",
+        k if k == vk::F7 => "F7",
+        k if k == vk::F8 => "F8",
+        k if k == vk::F9 => "F9",
         k if k == vk::F10 => "F10",
-        k if k == vk::UP     => "Up",
-        k if k == vk::DOWN   => "Down",
-        k if k == vk::LEFT   => "Left",
-        k if k == vk::RIGHT  => "Right",
-        k if k == vk::PRIOR  => "PgUp",
-        k if k == vk::NEXT   => "PgDn",
-        k if k == vk::HOME   => "Home",
-        k if k == vk::END    => "End",
+        k if k == vk::UP => "Up",
+        k if k == vk::DOWN => "Down",
+        k if k == vk::LEFT => "Left",
+        k if k == vk::RIGHT => "Right",
+        k if k == vk::PRIOR => "PgUp",
+        k if k == vk::NEXT => "PgDn",
+        k if k == vk::HOME => "Home",
+        k if k == vk::END => "End",
         k if k == vk::RETURN => "Enter",
         k if k == vk::ESCAPE => "Esc",
-        k if k == vk::TAB    => "Tab",
-        k if k == vk::BACK   => "Backspace",
+        k if k == vk::TAB => "Tab",
+        k if k == vk::BACK => "Backspace",
         k if k == vk::INSERT => "Ins",
         k if k == vk::DELETE => "Delete",
-        k if k == vk::SPACE  => "Space",
-        k if k == vk::A => "A", k if k == vk::B => "B", k if k == vk::C => "C",
-        k if k == vk::D => "D", k if k == vk::E => "E", k if k == vk::F => "F",
-        k if k == vk::G => "G", k if k == vk::H => "H", k if k == vk::I => "I",
-        k if k == vk::J => "J", k if k == vk::K => "K", k if k == vk::L => "L",
-        k if k == vk::M => "M", k if k == vk::N => "N", k if k == vk::O => "O",
-        k if k == vk::P => "P", k if k == vk::Q => "Q", k if k == vk::R => "R",
-        k if k == vk::S => "S", k if k == vk::T => "T", k if k == vk::U => "U",
-        k if k == vk::V => "V", k if k == vk::W => "W", k if k == vk::X => "X",
-        k if k == vk::Y => "Y", k if k == vk::Z => "Z",
+        k if k == vk::SPACE => "Space",
+        k if k == vk::A => "A",
+        k if k == vk::B => "B",
+        k if k == vk::C => "C",
+        k if k == vk::D => "D",
+        k if k == vk::E => "E",
+        k if k == vk::F => "F",
+        k if k == vk::G => "G",
+        k if k == vk::H => "H",
+        k if k == vk::I => "I",
+        k if k == vk::J => "J",
+        k if k == vk::K => "K",
+        k if k == vk::L => "L",
+        k if k == vk::M => "M",
+        k if k == vk::N => "N",
+        k if k == vk::O => "O",
+        k if k == vk::P => "P",
+        k if k == vk::Q => "Q",
+        k if k == vk::R => "R",
+        k if k == vk::S => "S",
+        k if k == vk::T => "T",
+        k if k == vk::U => "U",
+        k if k == vk::V => "V",
+        k if k == vk::W => "W",
+        k if k == vk::X => "X",
+        k if k == vk::Y => "Y",
+        k if k == vk::Z => "Z",
         _ => return format!("{prefix}?"),
     };
     format!("{prefix}{name}")
@@ -374,20 +508,56 @@ pub fn parse_key_name(s: &str) -> Option<InputKey> {
     }
 
     let base = match remaining {
-        "F1" => vk::F1, "F2" => vk::F2, "F3" => vk::F3, "F4" => vk::F4,
-        "F5" => vk::F5, "F6" => vk::F6, "F7" => vk::F7, "F8" => vk::F8,
-        "F9" => vk::F9, "F10" => vk::F10,
-        "Up" => vk::UP, "Down" => vk::DOWN, "Left" => vk::LEFT, "Right" => vk::RIGHT,
-        "PgUp" => vk::PRIOR, "PgDn" => vk::NEXT,
-        "Home" => vk::HOME, "End" => vk::END,
-        "Enter" => vk::RETURN, "Esc" => vk::ESCAPE, "Tab" => vk::TAB,
-        "Backspace" => vk::BACK, "Ins" => vk::INSERT, "Delete" => vk::DELETE,
+        "F1" => vk::F1,
+        "F2" => vk::F2,
+        "F3" => vk::F3,
+        "F4" => vk::F4,
+        "F5" => vk::F5,
+        "F6" => vk::F6,
+        "F7" => vk::F7,
+        "F8" => vk::F8,
+        "F9" => vk::F9,
+        "F10" => vk::F10,
+        "Up" => vk::UP,
+        "Down" => vk::DOWN,
+        "Left" => vk::LEFT,
+        "Right" => vk::RIGHT,
+        "PgUp" => vk::PRIOR,
+        "PgDn" => vk::NEXT,
+        "Home" => vk::HOME,
+        "End" => vk::END,
+        "Enter" => vk::RETURN,
+        "Esc" => vk::ESCAPE,
+        "Tab" => vk::TAB,
+        "Backspace" => vk::BACK,
+        "Ins" => vk::INSERT,
+        "Delete" => vk::DELETE,
         "Space" => vk::SPACE,
-        "A" => vk::A, "B" => vk::B, "C" => vk::C, "D" => vk::D, "E" => vk::E,
-        "F" => vk::F, "G" => vk::G, "H" => vk::H, "I" => vk::I, "J" => vk::J,
-        "K" => vk::K, "L" => vk::L, "M" => vk::M, "N" => vk::N, "O" => vk::O,
-        "P" => vk::P, "Q" => vk::Q, "R" => vk::R, "S" => vk::S, "T" => vk::T,
-        "U" => vk::U, "V" => vk::V, "W" => vk::W, "X" => vk::X, "Y" => vk::Y,
+        "A" => vk::A,
+        "B" => vk::B,
+        "C" => vk::C,
+        "D" => vk::D,
+        "E" => vk::E,
+        "F" => vk::F,
+        "G" => vk::G,
+        "H" => vk::H,
+        "I" => vk::I,
+        "J" => vk::J,
+        "K" => vk::K,
+        "L" => vk::L,
+        "M" => vk::M,
+        "N" => vk::N,
+        "O" => vk::O,
+        "P" => vk::P,
+        "Q" => vk::Q,
+        "R" => vk::R,
+        "S" => vk::S,
+        "T" => vk::T,
+        "U" => vk::U,
+        "V" => vk::V,
+        "W" => vk::W,
+        "X" => vk::X,
+        "Y" => vk::Y,
         "Z" => vk::Z,
         _ => return None,
     };
@@ -467,6 +637,10 @@ pub fn build_help_text(bindings: &[Binding]) -> Vec<(String, &'static str, Actio
         }
     }
     // Append Alt+letters note (not in binding table; handled specially).
-    result.push(("Alt+letters".to_string(), "Quick search by name", Action::Help));
+    result.push((
+        "Alt+letters".to_string(),
+        "Quick search by name",
+        Action::Help,
+    ));
     result
 }

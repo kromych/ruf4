@@ -123,25 +123,55 @@ fn draw_menubar(ctx: &mut Context, state: &mut State) -> bool {
         // "Commands" menu
         if ctx.menubar_menu_begin("Commands", 'C') {
             let hidden = state.active_panel().show_hidden;
-            if ctx.menubar_menu_checkbox("Show hidden files", 'H', key(Action::ToggleHidden), hidden) {
+            if ctx.menubar_menu_checkbox(
+                "Show hidden files",
+                'H',
+                key(Action::ToggleHidden),
+                hidden,
+            ) {
                 state.execute_action(Action::ToggleHidden);
             }
-            if ctx.menubar_menu_checkbox("Quick view", 'Q', key(Action::ToggleQuickView), state.quick_view) {
+            if ctx.menubar_menu_checkbox(
+                "Quick view",
+                'Q',
+                key(Action::ToggleQuickView),
+                state.quick_view,
+            ) {
                 state.execute_action(Action::ToggleQuickView);
             }
 
             // Sort modes (FAR-style: Ctrl+F3..F6)
             let sort = state.active_panel().sort_by;
-            if ctx.menubar_menu_checkbox("Sort by name", 'N', key(Action::SortBy(SortBy::Name)), sort == SortBy::Name) {
+            if ctx.menubar_menu_checkbox(
+                "Sort by name",
+                'N',
+                key(Action::SortBy(SortBy::Name)),
+                sort == SortBy::Name,
+            ) {
                 state.execute_action(Action::SortBy(SortBy::Name));
             }
-            if ctx.menubar_menu_checkbox("Sort by extension", 'E', key(Action::SortBy(SortBy::Extension)), sort == SortBy::Extension) {
+            if ctx.menubar_menu_checkbox(
+                "Sort by extension",
+                'E',
+                key(Action::SortBy(SortBy::Extension)),
+                sort == SortBy::Extension,
+            ) {
                 state.execute_action(Action::SortBy(SortBy::Extension));
             }
-            if ctx.menubar_menu_checkbox("Sort by date", 'D', key(Action::SortBy(SortBy::Modified)), sort == SortBy::Modified) {
+            if ctx.menubar_menu_checkbox(
+                "Sort by date",
+                'D',
+                key(Action::SortBy(SortBy::Modified)),
+                sort == SortBy::Modified,
+            ) {
                 state.execute_action(Action::SortBy(SortBy::Modified));
             }
-            if ctx.menubar_menu_checkbox("Sort by size", 'S', key(Action::SortBy(SortBy::Size)), sort == SortBy::Size) {
+            if ctx.menubar_menu_checkbox(
+                "Sort by size",
+                'S',
+                key(Action::SortBy(SortBy::Size)),
+                sort == SortBy::Size,
+            ) {
                 state.execute_action(Action::SortBy(SortBy::Size));
             }
 
@@ -353,7 +383,11 @@ fn draw_single_panel(
 
         if is_cursor && is_active {
             ctx.attr_background_rgba(ctx.indexed(theme.cursor_bg));
-            ctx.attr_foreground_rgba(ctx.indexed(theme.cursor_fg));
+            if entry.selected {
+                ctx.attr_foreground_rgba(ctx.indexed(theme.file_selected));
+            } else {
+                ctx.attr_foreground_rgba(ctx.indexed(theme.cursor_fg));
+            }
         } else if entry.selected {
             ctx.attr_foreground_rgba(ctx.indexed(theme.file_selected));
         } else if entry.is_dir {
@@ -479,7 +513,13 @@ fn draw_single_panel(
     ctx.block_end(); // panel
 }
 
-fn draw_preview_panel(ctx: &mut Context, state: &State, theme: &Theme, width: CoordType, height: CoordType) {
+fn draw_preview_panel(
+    ctx: &mut Context,
+    state: &State,
+    theme: &Theme,
+    width: CoordType,
+    height: CoordType,
+) {
     let border_lines = 2;
     let visible_height = (height - border_lines).max(1) as usize;
 
@@ -774,7 +814,9 @@ fn draw_dialog(ctx: &mut Context, state: &mut State, theme: &Theme, size: Size) 
             output,
             scroll,
         } => draw_shell_output_dialog(ctx, theme, command, output, *scroll, size),
-        Dialog::ConfirmQuit { save_settings } => draw_confirm_quit_dialog(ctx, theme, save_settings, size),
+        Dialog::ConfirmQuit { save_settings } => {
+            draw_confirm_quit_dialog(ctx, theme, save_settings, size)
+        }
         Dialog::SelectGroup { pattern, select } => {
             draw_select_group_dialog(ctx, theme, pattern, *select, input_cursor, size)
         }
@@ -786,7 +828,17 @@ fn draw_dialog(ctx: &mut Context, state: &mut State, theme: &Theme, size: Size) 
             min_width,
             ..
         } => {
-            draw_list_dialog(ctx, theme, "list-dialog", title, prompt, labels, *cursor, *min_width, size);
+            draw_list_dialog(
+                ctx,
+                theme,
+                "list-dialog",
+                title,
+                prompt,
+                labels,
+                *cursor,
+                *min_width,
+                size,
+            );
         }
         Dialog::ConfirmOverwrite {
             target_name,
@@ -869,7 +921,14 @@ fn dialog_prompt(ctx: &mut Context, id: &'static str, text: &str) {
     ctx.label(id, text);
 }
 
-fn dialog_input(ctx: &mut Context, theme: &Theme, id: &'static str, text: &str, cursor: usize, width: CoordType) {
+fn dialog_input(
+    ctx: &mut Context,
+    theme: &Theme,
+    id: &'static str,
+    text: &str,
+    cursor: usize,
+    width: CoordType,
+) {
     use ruf4_tui::framebuffer::Attributes;
 
     ctx.block_begin(id);
@@ -904,7 +963,13 @@ fn dialog_input(ctx: &mut Context, theme: &Theme, id: &'static str, text: &str, 
     ctx.block_end();
 }
 
-fn dialog_file_list(ctx: &mut Context, theme: &Theme, files: &[String], max_show: usize, width: CoordType) {
+fn dialog_file_list(
+    ctx: &mut Context,
+    theme: &Theme,
+    files: &[String],
+    max_show: usize,
+    width: CoordType,
+) {
     for (i, name) in files.iter().enumerate().take(max_show) {
         ctx.next_block_id_mixin(i as u64);
         ctx.block_begin("file-entry");
@@ -928,8 +993,18 @@ fn dialog_file_list(ctx: &mut Context, theme: &Theme, files: &[String], max_show
 // Individual dialogs
 
 fn draw_mkdir_dialog(ctx: &mut Context, theme: &Theme, name: &str, cursor: usize, size: Size) {
-    let spec = DialogSpec { bg: theme.dialog_info_bg, ..DIALOG_BLUE_50 };
-    let w = dialog_begin(ctx, theme, &spec, "Make Directory - Enter=OK  Esc=Cancel", 6, size);
+    let spec = DialogSpec {
+        bg: theme.dialog_info_bg,
+        ..DIALOG_BLUE_50
+    };
+    let w = dialog_begin(
+        ctx,
+        theme,
+        &spec,
+        "Make Directory - Enter=OK  Esc=Cancel",
+        6,
+        size,
+    );
     dialog_prompt(ctx, "prompt", "Enter directory name:");
     dialog_spacer(ctx, "sp-mid");
     dialog_input(ctx, theme, "input", name, cursor, w);
@@ -937,7 +1012,10 @@ fn draw_mkdir_dialog(ctx: &mut Context, theme: &Theme, name: &str, cursor: usize
 }
 
 fn draw_rename_dialog(ctx: &mut Context, theme: &Theme, name: &str, cursor: usize, size: Size) {
-    let spec = DialogSpec { bg: theme.dialog_info_bg, ..DIALOG_BLUE_50 };
+    let spec = DialogSpec {
+        bg: theme.dialog_info_bg,
+        ..DIALOG_BLUE_50
+    };
     let w = dialog_begin(ctx, theme, &spec, "Rename - Enter=OK  Esc=Cancel", 6, size);
     dialog_prompt(ctx, "prompt", "Enter new name:");
     dialog_spacer(ctx, "sp-mid");
@@ -953,7 +1031,14 @@ fn draw_delete_dialog(ctx: &mut Context, theme: &Theme, files: &[String], size: 
         ..DIALOG_RED_44
     };
     let h = files.len() as CoordType + 5;
-    let w = dialog_begin(ctx, theme, &spec, "Delete - Y/Enter=Delete  N/Esc=Cancel", h, size);
+    let w = dialog_begin(
+        ctx,
+        theme,
+        &spec,
+        "Delete - Y/Enter=Delete  N/Esc=Cancel",
+        h,
+        size,
+    );
     {
         let msg = if files.len() == 1 {
             arena_format!(ctx.arena(), "Delete \"{}\"?", files[0])
@@ -977,7 +1062,10 @@ fn draw_copy_move_dialog(
     cursor: usize,
     size: Size,
 ) {
-    let spec = DialogSpec { bg: theme.dialog_info_bg, ..DIALOG_BLUE_60 };
+    let spec = DialogSpec {
+        bg: theme.dialog_info_bg,
+        ..DIALOG_BLUE_60
+    };
     let caption = arena_format!(ctx.arena(), "{title} - Enter=OK  Esc=Cancel");
     let w = dialog_begin(ctx, theme, &spec, &caption, 8, size);
     {
@@ -1171,7 +1259,10 @@ fn draw_select_group_dialog(
     } else {
         "Deselect Group - Enter=OK  Esc=Cancel"
     };
-    let spec = DialogSpec { bg: theme.dialog_info_bg, ..DIALOG_BLUE_50 };
+    let spec = DialogSpec {
+        bg: theme.dialog_info_bg,
+        ..DIALOG_BLUE_50
+    };
     let w = dialog_begin(ctx, theme, &spec, title, 6, size);
     {
         let prompt = if select {
@@ -1186,10 +1277,19 @@ fn draw_select_group_dialog(
     dialog_end(ctx);
 }
 
-fn draw_confirm_overwrite_dialog(ctx: &mut Context, theme: &Theme, target_name: &str, is_copy: bool, size: Size) {
+fn draw_confirm_overwrite_dialog(
+    ctx: &mut Context,
+    theme: &Theme,
+    target_name: &str,
+    is_copy: bool,
+    size: Size,
+) {
     let op = if is_copy { "Copy" } else { "Move" };
     let caption = arena_format!(ctx.arena(), "{op} - Y=Overwrite  N=Skip  A=All  Esc=Cancel");
-    let spec = DialogSpec { bg: theme.dialog_error_bg, ..DIALOG_RED_60 };
+    let spec = DialogSpec {
+        bg: theme.dialog_error_bg,
+        ..DIALOG_RED_60
+    };
     dialog_begin(ctx, theme, &spec, &caption, 4, size);
     {
         let msg = arena_format!(ctx.arena(), "Overwrite \"{}\"?", target_name);
@@ -1242,14 +1342,26 @@ fn draw_list_dialog(
     dialog_end(ctx);
 }
 
-fn draw_confirm_quit_dialog(ctx: &mut Context, theme: &Theme, save_settings: &mut bool, size: Size) {
+fn draw_confirm_quit_dialog(
+    ctx: &mut Context,
+    theme: &Theme,
+    save_settings: &mut bool,
+    size: Size,
+) {
     let spec = DialogSpec {
         id: "quit-dialog",
         bg: theme.dialog_error_bg,
         preferred_width: 44,
         ..DIALOG_RED_44
     };
-    dialog_begin(ctx, theme, &spec, "Quit - Y/Enter=Exit  N/Esc=Cancel", 6, size);
+    dialog_begin(
+        ctx,
+        theme,
+        &spec,
+        "Quit - Y/Enter=Exit  N/Esc=Cancel",
+        6,
+        size,
+    );
     dialog_prompt(ctx, "prompt", "Do you want to quit ruf4?");
     ctx.label("spacer", "");
     ctx.checkbox("save-checkbox", "Save settings on exit", save_settings);

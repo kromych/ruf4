@@ -799,8 +799,16 @@ impl State {
         let slot = (x / slot_width).min(9);
         // F1..F10 map to slots 0..9; reuse the binding table.
         let fkeys = [
-            vk::F1, vk::F2, vk::F3, vk::F4, vk::F5,
-            vk::F6, vk::F7, vk::F8, vk::F9, vk::F10,
+            vk::F1,
+            vk::F2,
+            vk::F3,
+            vk::F4,
+            vk::F5,
+            vk::F6,
+            vk::F7,
+            vk::F8,
+            vk::F9,
+            vk::F10,
         ];
         if let Some(&fk) = fkeys.get(slot as usize) {
             if let Some(act) = action::lookup(&self.bindings, fk) {

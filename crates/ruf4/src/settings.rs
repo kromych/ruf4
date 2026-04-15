@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use crate::action::{self, Binding};
 use crate::panel::{SortBy, SortDir};
 use crate::state::{ActivePanel, MAX_HISTORY};
-use crate::theme::{self, Theme, THEME_FIELDS};
+use crate::theme::{self, THEME_FIELDS, Theme};
 
 const MAX_SETTINGS_SIZE: u64 = 1_048_576; // 1 MiB
 
@@ -149,13 +149,22 @@ impl Settings {
                         if !parsed_keys.is_empty() {
                             bindings.retain(|b| b.action != action);
                             for input_key in parsed_keys {
-                                bindings.push(Binding { key: input_key, action });
+                                bindings.push(Binding {
+                                    key: input_key,
+                                    action,
+                                });
                             }
                         }
                     } else if let Some(input_key) = action::parse_key_name(value) {
                         // Legacy format: add if not already present.
-                        if !bindings.iter().any(|b| b.action == action && b.key == input_key) {
-                            bindings.push(Binding { key: input_key, action });
+                        if !bindings
+                            .iter()
+                            .any(|b| b.action == action && b.key == input_key)
+                        {
+                            bindings.push(Binding {
+                                key: input_key,
+                                action,
+                            });
                         }
                     }
                 }
@@ -233,16 +242,20 @@ quick_view={}\n",
                 continue;
             }
             let action_name = action::action_str(binding.action);
-            let current_keys: Vec<_> = self.bindings.iter()
+            let current_keys: Vec<_> = self
+                .bindings
+                .iter()
                 .filter(|b| b.action == binding.action)
                 .map(|b| b.key)
                 .collect();
-            let default_keys: Vec<_> = defaults.iter()
+            let default_keys: Vec<_> = defaults
+                .iter()
                 .filter(|b| b.action == binding.action)
                 .map(|b| b.key)
                 .collect();
             if current_keys != default_keys {
-                let key_strs: Vec<_> = current_keys.iter()
+                let key_strs: Vec<_> = current_keys
+                    .iter()
                     .map(|k| action::key_display_name(*k))
                     .collect();
                 content.push_str(&format!("bind.{}={}\n", action_name, key_strs.join(",")));
@@ -257,10 +270,7 @@ quick_view={}\n",
                 (self.theme.get_field(field), default_theme.get_field(field))
             {
                 if theme::color_str(current) != theme::color_str(default) {
-                    content.push_str(&format!(
-                        "theme.{field}={}\n",
-                        theme::color_str(current),
-                    ));
+                    content.push_str(&format!("theme.{field}={}\n", theme::color_str(current),));
                 }
             }
         }
