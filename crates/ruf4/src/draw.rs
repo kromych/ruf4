@@ -20,11 +20,12 @@ use ruf4_tui::helpers::*;
 use ruf4_tui::tui::Context;
 use stdext::arena_format;
 
-use ruf4_tui::input::{kbmod, vk};
+use ruf4_tui::input::vk;
 
+use crate::action::{self, Action};
 use crate::platform;
+use crate::theme::Theme;
 
-use crate::lsh::HighlightKind;
 use crate::panel::{self, Panel, SortBy, SortDir};
 use crate::preview::HighlightSpan;
 use crate::state::{ActivePanel, Dialog, State};
@@ -43,6 +44,8 @@ pub fn draw(ctx: &mut Context, state: &mut State) -> DrawResult {
         };
     }
 
+    let theme = state.theme.clone();
+
     ctx.table_begin("root");
     ctx.attr_intrinsic_size(size);
     let menu_active;
@@ -51,18 +54,18 @@ pub fn draw(ctx: &mut Context, state: &mut State) -> DrawResult {
         menu_active = draw_menubar(ctx, state);
 
         ctx.table_next_row();
-        draw_panels(ctx, state, size);
+        draw_panels(ctx, state, &theme, size);
 
         ctx.table_next_row();
-        draw_path_bar(ctx, state, size);
+        draw_path_bar(ctx, state, &theme, size);
 
         ctx.table_next_row();
-        draw_fn_bar(ctx, size);
+        draw_fn_bar(ctx, &theme, size);
     }
     ctx.table_end();
 
-    draw_clock(ctx, size);
-    draw_dialog(ctx, state, size);
+    draw_clock(ctx, &theme, size);
+    draw_dialog(ctx, state, &theme, size);
 
     DrawResult {
         menu_active,
@@ -71,9 +74,15 @@ pub fn draw(ctx: &mut Context, state: &mut State) -> DrawResult {
 }
 
 fn draw_menubar(ctx: &mut Context, state: &mut State) -> bool {
+    // Snapshot binding keys into locals so we don't hold a borrow on state
+    // across mutable execute_action() calls.
+    let bindings = state.bindings.clone();
+    let key = |a: Action| action::key_for(&bindings, a);
+    let theme = &state.theme;
+
     ctx.menubar_begin();
-    ctx.attr_background_rgba(ctx.indexed(IndexedColor::Black));
-    ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
+    ctx.attr_background_rgba(ctx.indexed(theme.menubar_bg));
+    ctx.attr_foreground_rgba(ctx.indexed(theme.menubar_fg));
     let menu_active;
     {
         let contains_focus = ctx.contains_focus();
@@ -81,37 +90,32 @@ fn draw_menubar(ctx: &mut Context, state: &mut State) -> bool {
 
         // "Files" menu
         if ctx.menubar_menu_begin("Files", 'F') {
-            if ctx.menubar_menu_button("Copy", 'C', vk::F5) {
-                state.open_copy_dialog();
+            if ctx.menubar_menu_button("Copy", 'C', key(Action::Copy)) {
+                state.execute_action(Action::Copy);
             }
-            if ctx.menubar_menu_button("Rename/Move", 'R', vk::F6) {
-                state.open_move_dialog();
+            if ctx.menubar_menu_button("Rename/Move", 'R', key(Action::Move)) {
+                state.execute_action(Action::Move);
             }
-            if ctx.menubar_menu_button("Make directory", 'M', vk::F7) {
-                state.dialog = Dialog::MkDir {
-                    name: String::new(),
-                };
+            if ctx.menubar_menu_button("Make directory", 'M', key(Action::MkDir)) {
+                state.execute_action(Action::MkDir);
             }
-            if ctx.menubar_menu_button("Delete", 'D', vk::F8) {
-                state.open_delete_dialog();
+            if ctx.menubar_menu_button("Delete", 'D', key(Action::Delete)) {
+                state.execute_action(Action::Delete);
             }
-            if ctx.menubar_menu_button("Change root", 'H', kbmod::CTRL | vk::G) {
-                state.open_choose_root();
+            if ctx.menubar_menu_button("Change root", 'H', key(Action::ChangeRoot)) {
+                state.execute_action(Action::ChangeRoot);
             }
-            if ctx.menubar_menu_button("Directory history", 'D', kbmod::CTRL | vk::D) {
-                state.open_dir_history();
+            if ctx.menubar_menu_button("Directory history", 'D', key(Action::DirHistory)) {
+                state.execute_action(Action::DirHistory);
             }
-            if ctx.menubar_menu_button("Command history", 'O', kbmod::CTRL | vk::E) {
-                state.open_cmd_history();
+            if ctx.menubar_menu_button("Command history", 'O', key(Action::CmdHistory)) {
+                state.execute_action(Action::CmdHistory);
             }
-            if ctx.menubar_menu_button("Refresh", 'E', kbmod::CTRL | vk::R) {
-                state.left.refresh();
-                state.right.refresh();
+            if ctx.menubar_menu_button("Refresh", 'E', key(Action::Refresh)) {
+                state.execute_action(Action::Refresh);
             }
-            if ctx.menubar_menu_button("Exit", 'X', vk::F10) {
-                state.dialog = Dialog::ConfirmQuit {
-                    save_settings: true,
-                };
+            if ctx.menubar_menu_button("Exit", 'X', key(Action::Quit)) {
+                state.execute_action(Action::Quit);
             }
             ctx.menubar_menu_end();
         }
@@ -119,157 +123,59 @@ fn draw_menubar(ctx: &mut Context, state: &mut State) -> bool {
         // "Commands" menu
         if ctx.menubar_menu_begin("Commands", 'C') {
             let hidden = state.active_panel().show_hidden;
-            if ctx.menubar_menu_checkbox("Show hidden files", 'H', kbmod::CTRL | vk::H, hidden) {
-                let panel = state.active_panel_mut();
-                panel.show_hidden = !panel.show_hidden;
-                panel.refresh();
+            if ctx.menubar_menu_checkbox("Show hidden files", 'H', key(Action::ToggleHidden), hidden) {
+                state.execute_action(Action::ToggleHidden);
             }
-            if ctx.menubar_menu_checkbox("Quick view", 'Q', kbmod::CTRL | vk::Q, state.quick_view) {
-                state.quick_view = !state.quick_view;
-                if state.quick_view {
-                    state.preview_path = None;
-                }
+            if ctx.menubar_menu_checkbox("Quick view", 'Q', key(Action::ToggleQuickView), state.quick_view) {
+                state.execute_action(Action::ToggleQuickView);
             }
 
             // Sort modes (FAR-style: Ctrl+F3..F6)
             let sort = state.active_panel().sort_by;
-            if ctx.menubar_menu_checkbox(
-                "Sort by name",
-                'N',
-                kbmod::CTRL | vk::F3,
-                sort == SortBy::Name,
-            ) {
-                state.active_panel_mut().set_sort(SortBy::Name);
+            if ctx.menubar_menu_checkbox("Sort by name", 'N', key(Action::SortBy(SortBy::Name)), sort == SortBy::Name) {
+                state.execute_action(Action::SortBy(SortBy::Name));
             }
-            if ctx.menubar_menu_checkbox(
-                "Sort by extension",
-                'E',
-                kbmod::CTRL | vk::F4,
-                sort == SortBy::Extension,
-            ) {
-                state.active_panel_mut().set_sort(SortBy::Extension);
+            if ctx.menubar_menu_checkbox("Sort by extension", 'E', key(Action::SortBy(SortBy::Extension)), sort == SortBy::Extension) {
+                state.execute_action(Action::SortBy(SortBy::Extension));
             }
-            if ctx.menubar_menu_checkbox(
-                "Sort by date",
-                'D',
-                kbmod::CTRL | vk::F5,
-                sort == SortBy::Modified,
-            ) {
-                state.active_panel_mut().set_sort(SortBy::Modified);
+            if ctx.menubar_menu_checkbox("Sort by date", 'D', key(Action::SortBy(SortBy::Modified)), sort == SortBy::Modified) {
+                state.execute_action(Action::SortBy(SortBy::Modified));
             }
-            if ctx.menubar_menu_checkbox(
-                "Sort by size",
-                'S',
-                kbmod::CTRL | vk::F6,
-                sort == SortBy::Size,
-            ) {
-                state.active_panel_mut().set_sort(SortBy::Size);
+            if ctx.menubar_menu_checkbox("Sort by size", 'S', key(Action::SortBy(SortBy::Size)), sort == SortBy::Size) {
+                state.execute_action(Action::SortBy(SortBy::Size));
             }
 
             // Selection operations
             if ctx.menubar_menu_button("Select group  (+)", 'G', vk::NULL) {
-                state.dialog = Dialog::SelectGroup {
-                    pattern: "*".to_string(),
-                    select: true,
-                };
+                state.execute_action(Action::SelectGroup);
             }
             if ctx.menubar_menu_button("Deselect group  (-)", 'L', vk::NULL) {
-                state.dialog = Dialog::SelectGroup {
-                    pattern: "*".to_string(),
-                    select: false,
-                };
+                state.execute_action(Action::DeselectGroup);
             }
             if ctx.menubar_menu_button("Invert selection  (*)", 'I', vk::NULL) {
-                state.active_panel_mut().invert_selection();
+                state.execute_action(Action::InvertSelection);
             }
-            if ctx.menubar_menu_button("Select all", 'A', kbmod::CTRL | vk::A) {
-                state.active_panel_mut().select_all();
+            if ctx.menubar_menu_button("Select all", 'A', key(Action::SelectAll)) {
+                state.execute_action(Action::SelectAll);
             }
             if ctx.menubar_menu_button("Deselect all", 'T', vk::NULL) {
-                state.active_panel_mut().clear_selection();
+                state.execute_action(Action::DeselectAll);
             }
 
             ctx.menubar_menu_end();
         }
 
         // Global shortcuts (outside menu blocks so they fire when menus are closed).
-        if ctx.consume_shortcut(vk::F1) {
-            state.dialog = Dialog::Help { scroll: 0 };
-        }
-        if ctx.consume_shortcut(kbmod::CTRL | vk::G) {
-            state.open_choose_root();
-        }
-        if ctx.consume_shortcut(kbmod::CTRL | vk::D) {
-            state.open_dir_history();
-        }
-        if ctx.consume_shortcut(kbmod::CTRL | vk::E) {
-            state.open_cmd_history();
-        }
-        if ctx.consume_shortcut(vk::F4) {
-            state.open_rename_dialog();
-        }
-        if ctx.consume_shortcut(vk::F5) {
-            state.open_copy_dialog();
-        }
-        if ctx.consume_shortcut(vk::F6) {
-            state.open_move_dialog();
-        }
-        if ctx.consume_shortcut(vk::F7) {
-            state.dialog = Dialog::MkDir {
-                name: String::new(),
-            };
-        }
-        if ctx.consume_shortcut(vk::F8) {
-            state.open_delete_dialog();
-        }
-        if ctx.consume_shortcut(vk::F2) {
-            match state.save_settings() {
-                Ok(()) => {
-                    state.dialog = Dialog::Info {
-                        message: "Settings saved.".to_string(),
-                    };
-                }
-                Err(msg) => {
-                    state.dialog = Dialog::Error { message: msg };
+        // Non-immediate actions are consumed here.  When the menu is active,
+        // handle_keyboard() in state.rs is skipped, so we must dispatch here.
+        // When the menu is NOT active, handle_keyboard() already dispatched,
+        // so we only consume (to prevent the TUI from reprocessing the key).
+        for binding in &bindings {
+            if !binding.action.is_immediate() && ctx.consume_shortcut(binding.key) {
+                if contains_focus {
+                    state.execute_action(binding.action);
                 }
             }
-        }
-        if ctx.consume_shortcut(vk::F3) {
-            state.quick_view = !state.quick_view;
-            if state.quick_view {
-                state.preview_path = None;
-            }
-        }
-        if ctx.consume_shortcut(kbmod::CTRL | vk::R) {
-            state.left.refresh();
-            state.right.refresh();
-        }
-
-        if ctx.consume_shortcut(kbmod::CTRL | vk::H) {
-            let panel = state.active_panel_mut();
-            panel.show_hidden = !panel.show_hidden;
-            panel.refresh();
-        }
-        if ctx.consume_shortcut(kbmod::CTRL | vk::Q) {
-            state.quick_view = !state.quick_view;
-            if state.quick_view {
-                state.preview_path = None;
-            }
-        }
-        if ctx.consume_shortcut(kbmod::CTRL | vk::F3) {
-            state.active_panel_mut().set_sort(SortBy::Name);
-        }
-        if ctx.consume_shortcut(kbmod::CTRL | vk::F4) {
-            state.active_panel_mut().set_sort(SortBy::Extension);
-        }
-        if ctx.consume_shortcut(kbmod::CTRL | vk::F5) {
-            state.active_panel_mut().set_sort(SortBy::Modified);
-        }
-        if ctx.consume_shortcut(kbmod::CTRL | vk::F6) {
-            state.active_panel_mut().set_sort(SortBy::Size);
-        }
-        if ctx.consume_shortcut(kbmod::CTRL | vk::A) {
-            state.active_panel_mut().select_all();
         }
 
         if !contains_focus && (ctx.consume_shortcut(vk::F9) || state.want_menu_focus) {
@@ -280,7 +186,7 @@ fn draw_menubar(ctx: &mut Context, state: &mut State) -> bool {
     menu_active
 }
 
-fn draw_panels(ctx: &mut Context, state: &State, size: Size) {
+fn draw_panels(ctx: &mut Context, state: &State, theme: &Theme, size: Size) {
     let panel_height = size.height - 3; // minus menubar, path bar, fn bar
     let panel_width = size.width / 2;
 
@@ -294,10 +200,11 @@ fn draw_panels(ctx: &mut Context, state: &State, size: Size) {
         ctx.table_next_row();
 
         if state.quick_view && state.active == ActivePanel::Right {
-            draw_preview_panel(ctx, state, panel_width, panel_height);
+            draw_preview_panel(ctx, state, theme, panel_width, panel_height);
             draw_single_panel(
                 ctx,
                 &state.right,
+                theme,
                 "right-panel",
                 true,
                 size.width - panel_width,
@@ -307,17 +214,19 @@ fn draw_panels(ctx: &mut Context, state: &State, size: Size) {
             draw_single_panel(
                 ctx,
                 &state.left,
+                theme,
                 "left-panel",
                 state.active == ActivePanel::Left,
                 panel_width,
                 panel_height,
             );
             if state.quick_view && state.active == ActivePanel::Left {
-                draw_preview_panel(ctx, state, size.width - panel_width, panel_height);
+                draw_preview_panel(ctx, state, theme, size.width - panel_width, panel_height);
             } else {
                 draw_single_panel(
                     ctx,
                     &state.right,
+                    theme,
                     "right-panel",
                     state.active == ActivePanel::Right,
                     size.width - panel_width,
@@ -361,6 +270,7 @@ fn truncate_to_display_width(s: &str, max_cols: usize) -> &str {
 fn draw_single_panel(
     ctx: &mut Context,
     panel: &Panel,
+    theme: &Theme,
     classname: &'static str,
     is_active: bool,
     width: CoordType,
@@ -385,9 +295,9 @@ fn draw_single_panel(
     ctx.attr_border();
 
     if is_active {
-        ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightCyan));
+        ctx.attr_foreground_rgba(ctx.indexed(theme.panel_border_active));
     } else {
-        ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::Cyan));
+        ctx.attr_foreground_rgba(ctx.indexed(theme.panel_border_inactive));
     }
 
     {
@@ -408,8 +318,8 @@ fn draw_single_panel(
             height: 1,
         });
         {
-            let bg = ctx.indexed(IndexedColor::Cyan);
-            let fg = ctx.indexed(IndexedColor::Black);
+            let bg = ctx.indexed(theme.panel_header_bg);
+            let fg = ctx.indexed(theme.panel_header_fg);
             ctx.attr_background_rgba(bg);
             ctx.attr_foreground_rgba(fg);
 
@@ -442,18 +352,18 @@ fn draw_single_panel(
         });
 
         if is_cursor && is_active {
-            ctx.attr_background_rgba(ctx.indexed(IndexedColor::Cyan));
-            ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::Black));
+            ctx.attr_background_rgba(ctx.indexed(theme.cursor_bg));
+            ctx.attr_foreground_rgba(ctx.indexed(theme.cursor_fg));
         } else if entry.selected {
-            ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightYellow));
+            ctx.attr_foreground_rgba(ctx.indexed(theme.file_selected));
         } else if entry.is_dir {
-            ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
+            ctx.attr_foreground_rgba(ctx.indexed(theme.file_dir));
         } else if entry.is_executable {
-            ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightGreen));
+            ctx.attr_foreground_rgba(ctx.indexed(theme.file_executable));
         } else if entry.is_readonly {
-            ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightBlack));
+            ctx.attr_foreground_rgba(ctx.indexed(theme.file_readonly));
         } else {
-            ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::White));
+            ctx.attr_foreground_rgba(ctx.indexed(theme.file_normal));
         }
 
         let date_col = 16; // "2026-04-09 12:34"
@@ -522,8 +432,8 @@ fn draw_single_panel(
             height: 1,
         });
         {
-            let bg = ctx.indexed(IndexedColor::Cyan);
-            let fg = ctx.indexed(IndexedColor::Black);
+            let bg = ctx.indexed(theme.panel_footer_bg);
+            let fg = ctx.indexed(theme.panel_footer_fg);
             ctx.attr_background_rgba(bg);
             ctx.attr_foreground_rgba(fg);
 
@@ -569,7 +479,7 @@ fn draw_single_panel(
     ctx.block_end(); // panel
 }
 
-fn draw_preview_panel(ctx: &mut Context, state: &State, width: CoordType, height: CoordType) {
+fn draw_preview_panel(ctx: &mut Context, state: &State, theme: &Theme, width: CoordType, height: CoordType) {
     let border_lines = 2;
     let visible_height = (height - border_lines).max(1) as usize;
 
@@ -579,7 +489,7 @@ fn draw_preview_panel(ctx: &mut Context, state: &State, width: CoordType, height
         height: height - 2,
     });
     ctx.attr_border();
-    ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightGreen));
+    ctx.attr_foreground_rgba(ctx.indexed(theme.preview_border));
 
     {
         let title = if state.preview.title.is_empty() {
@@ -610,7 +520,7 @@ fn draw_preview_panel(ctx: &mut Context, state: &State, width: CoordType, height
             width: width - 2,
             height: 1,
         });
-        ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::White));
+        ctx.attr_foreground_rgba(ctx.indexed(theme.preview_text));
 
         let max_w = (width - 2).max(0) as usize;
         let display = if line.len() > max_w {
@@ -621,7 +531,7 @@ fn draw_preview_panel(ctx: &mut Context, state: &State, width: CoordType, height
 
         let hl = highlights.get(i);
         if hl.is_some_and(|h| !h.is_empty()) {
-            draw_highlighted_line(ctx, display, hl.unwrap());
+            draw_highlighted_line(ctx, theme, display, hl.unwrap());
         } else {
             ctx.label("preview-text", display);
         }
@@ -641,10 +551,10 @@ fn draw_preview_panel(ctx: &mut Context, state: &State, width: CoordType, height
     ctx.block_end();
 }
 
-fn draw_highlighted_line(ctx: &mut Context, line: &str, spans: &[HighlightSpan]) {
+fn draw_highlighted_line(ctx: &mut Context, theme: &Theme, line: &str, spans: &[HighlightSpan]) {
     ctx.styled_label_begin("preview-text");
 
-    let default_fg = ctx.indexed(IndexedColor::White);
+    let default_fg = ctx.indexed(theme.preview_text);
     let mut pos = 0;
 
     for (idx, span) in spans.iter().enumerate() {
@@ -666,7 +576,7 @@ fn draw_highlighted_line(ctx: &mut Context, line: &str, spans: &[HighlightSpan])
         if start < end {
             let text = &line[line.ceil_char_boundary(start)..line.floor_char_boundary(end)];
             if !text.is_empty() {
-                ctx.styled_label_set_foreground(highlight_color(ctx, span.kind));
+                ctx.styled_label_set_foreground(ctx.indexed(theme.highlight_color(span.kind)));
                 ctx.styled_label_add_text(text);
             }
         }
@@ -683,37 +593,14 @@ fn draw_highlighted_line(ctx: &mut Context, line: &str, spans: &[HighlightSpan])
     ctx.styled_label_end();
 }
 
-fn highlight_color(ctx: &Context, kind: HighlightKind) -> ruf4_tui::oklab::StraightRgba {
-    ctx.indexed(match kind {
-        HighlightKind::Comment => IndexedColor::BrightBlack,
-        HighlightKind::String => IndexedColor::Green,
-        HighlightKind::KeywordControl | HighlightKind::KeywordOther => IndexedColor::BrightYellow,
-        HighlightKind::ConstantNumeric => IndexedColor::BrightCyan,
-        HighlightKind::ConstantLanguage => IndexedColor::BrightMagenta,
-        HighlightKind::Method => IndexedColor::BrightGreen,
-        HighlightKind::Variable => IndexedColor::Cyan,
-        HighlightKind::MarkupHeading => IndexedColor::BrightYellow,
-        HighlightKind::MarkupBold => IndexedColor::BrightWhite,
-        HighlightKind::MarkupItalic => IndexedColor::White,
-        HighlightKind::MarkupLink => IndexedColor::BrightCyan,
-        HighlightKind::MarkupList => IndexedColor::Yellow,
-        HighlightKind::MarkupInserted => IndexedColor::BrightGreen,
-        HighlightKind::MarkupDeleted => IndexedColor::BrightRed,
-        HighlightKind::MarkupChanged => IndexedColor::BrightYellow,
-        HighlightKind::MarkupStrikethrough => IndexedColor::BrightBlack,
-        HighlightKind::MetaHeader => IndexedColor::BrightMagenta,
-        HighlightKind::Other => IndexedColor::White,
-    })
-}
-
-fn draw_path_bar(ctx: &mut Context, state: &State, size: Size) {
+fn draw_path_bar(ctx: &mut Context, state: &State, theme: &Theme, size: Size) {
     ctx.block_begin("pathbar");
     ctx.attr_intrinsic_size(Size {
         width: size.width,
         height: 1,
     });
     {
-        let bg = ctx.indexed(IndexedColor::Black);
+        let bg = ctx.indexed(theme.pathbar_bg);
         ctx.attr_background_rgba(bg);
 
         let path = state.active_panel().path.to_string_lossy();
@@ -723,11 +610,11 @@ fn draw_path_bar(ctx: &mut Context, state: &State, size: Size) {
             use ruf4_tui::framebuffer::Attributes;
 
             ctx.styled_label_begin("path-text");
-            ctx.styled_label_set_foreground(ctx.indexed(IndexedColor::White));
+            ctx.styled_label_set_foreground(ctx.indexed(theme.pathbar_path));
             let prefix = arena_format!(ctx.arena(), " {path}");
             ctx.styled_label_add_text(&prefix);
-            draw_prompt_char(ctx, prompt_char);
-            ctx.styled_label_set_foreground(ctx.indexed(IndexedColor::BrightWhite));
+            draw_prompt_char(ctx, theme, prompt_char);
+            ctx.styled_label_set_foreground(ctx.indexed(theme.pathbar_command));
             ctx.styled_label_add_text(" ");
 
             let cmd = &state.command_line;
@@ -745,7 +632,7 @@ fn draw_path_bar(ctx: &mut Context, state: &State, size: Size) {
                 let next = after.char_indices().nth(1).map_or(after.len(), |(i, _)| i);
                 ctx.styled_label_add_text(&after[..next]);
                 ctx.styled_label_set_attributes(Attributes::None);
-                ctx.styled_label_set_foreground(ctx.indexed(IndexedColor::BrightWhite));
+                ctx.styled_label_set_foreground(ctx.indexed(theme.pathbar_command));
                 ctx.styled_label_add_text(&after[next..]);
             }
             ctx.styled_label_end();
@@ -753,9 +640,9 @@ fn draw_path_bar(ctx: &mut Context, state: &State, size: Size) {
             use ruf4_tui::framebuffer::Attributes;
 
             ctx.styled_label_begin("path-text");
-            ctx.styled_label_set_foreground(ctx.indexed(IndexedColor::White));
+            ctx.styled_label_set_foreground(ctx.indexed(theme.pathbar_path));
             ctx.styled_label_add_text(" search: ");
-            ctx.styled_label_set_foreground(ctx.indexed(IndexedColor::BrightYellow));
+            ctx.styled_label_set_foreground(ctx.indexed(theme.pathbar_search));
             ctx.styled_label_add_text(&state.alt_search);
             ctx.styled_label_set_attributes(Attributes::Underlined);
             ctx.styled_label_add_text(" ");
@@ -764,10 +651,10 @@ fn draw_path_bar(ctx: &mut Context, state: &State, size: Size) {
             use ruf4_tui::framebuffer::Attributes;
 
             ctx.styled_label_begin("path-text");
-            ctx.styled_label_set_foreground(ctx.indexed(IndexedColor::BrightWhite));
+            ctx.styled_label_set_foreground(ctx.indexed(theme.pathbar_path_active));
             let text = arena_format!(ctx.arena(), " {path}");
             ctx.styled_label_add_text(&text);
-            draw_prompt_char(ctx, prompt_char);
+            draw_prompt_char(ctx, theme, prompt_char);
             ctx.styled_label_add_text(" ");
             ctx.styled_label_set_attributes(Attributes::Underlined);
             ctx.styled_label_add_text(" ");
@@ -777,17 +664,17 @@ fn draw_path_bar(ctx: &mut Context, state: &State, size: Size) {
     ctx.block_end();
 }
 
-fn draw_prompt_char(ctx: &mut Context, ch: &str) {
+fn draw_prompt_char(ctx: &mut Context, theme: &Theme, ch: &str) {
     if ch == "#" {
-        ctx.styled_label_set_foreground(ctx.indexed(IndexedColor::BrightRed));
+        ctx.styled_label_set_foreground(ctx.indexed(theme.pathbar_prompt_root));
         ctx.styled_label_add_text(ch);
     } else {
-        ctx.styled_label_set_foreground(ctx.indexed(IndexedColor::White));
+        ctx.styled_label_set_foreground(ctx.indexed(theme.pathbar_prompt));
         ctx.styled_label_add_text(ch);
     }
 }
 
-fn draw_clock(ctx: &mut Context, size: Size) {
+fn draw_clock(ctx: &mut Context, theme: &Theme, size: Size) {
     let lt = platform::local_time_now();
     let sep = if lt.sec.is_multiple_of(2) { ':' } else { ' ' };
     let time_str = arena_format!(
@@ -813,19 +700,19 @@ fn draw_clock(ctx: &mut Context, size: Size) {
         width: time_width,
         height: 1,
     });
-    ctx.attr_background_rgba(ctx.indexed(IndexedColor::Cyan));
-    ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::Black));
+    ctx.attr_background_rgba(ctx.indexed(theme.clock_bg));
+    ctx.attr_foreground_rgba(ctx.indexed(theme.clock_fg));
     ctx.label("clock-text", &time_str);
     ctx.block_end();
 }
 
-fn draw_fn_bar(ctx: &mut Context, size: Size) {
+fn draw_fn_bar(ctx: &mut Context, theme: &Theme, size: Size) {
     ctx.block_begin("fnbar");
     ctx.attr_intrinsic_size(Size {
         width: size.width,
         height: 1,
     });
-    ctx.attr_background_rgba(ctx.indexed(IndexedColor::Black));
+    ctx.attr_background_rgba(ctx.indexed(theme.fnbar_bg));
     {
         let keys: &[(&str, &str)] = &[
             ("1", "Help"),
@@ -850,12 +737,12 @@ fn draw_fn_bar(ctx: &mut Context, size: Size) {
             let label_len = label.len();
             let pad = slot_width.saturating_sub(num_len + label_len);
 
-            ctx.styled_label_set_foreground(ctx.indexed(IndexedColor::BrightWhite));
+            ctx.styled_label_set_foreground(ctx.indexed(theme.fnbar_number));
             ctx.styled_label_add_text(num);
-            ctx.styled_label_set_foreground(ctx.indexed(IndexedColor::Cyan));
+            ctx.styled_label_set_foreground(ctx.indexed(theme.fnbar_label));
             ctx.styled_label_add_text(label);
             if i < keys.len() - 1 {
-                ctx.styled_label_set_foreground(ctx.indexed(IndexedColor::Black));
+                ctx.styled_label_set_foreground(ctx.indexed(theme.fnbar_spacer));
                 let spaces = arena_format!(ctx.arena(), "{:>pad$}", "", pad = pad);
                 ctx.styled_label_add_text(&spaces);
             }
@@ -866,94 +753,46 @@ fn draw_fn_bar(ctx: &mut Context, size: Size) {
     ctx.block_end();
 }
 
-fn draw_dialog(ctx: &mut Context, state: &mut State, size: Size) {
+fn draw_dialog(ctx: &mut Context, state: &mut State, theme: &Theme, size: Size) {
     let input_cursor = state.input_cursor;
     match &mut state.dialog {
         Dialog::None => {}
-        Dialog::Help { scroll } => draw_help_dialog(ctx, *scroll, size),
-        Dialog::MkDir { name } => draw_mkdir_dialog(ctx, name, input_cursor, size),
-        Dialog::Rename { name } => draw_rename_dialog(ctx, name, input_cursor, size),
-        Dialog::Delete { files } => draw_delete_dialog(ctx, files, size),
+        Dialog::Help { scroll } => draw_help_dialog(ctx, theme, &state.help_text, *scroll, size),
+        Dialog::MkDir { name } => draw_mkdir_dialog(ctx, theme, name, input_cursor, size),
+        Dialog::Rename { name } => draw_rename_dialog(ctx, theme, name, input_cursor, size),
+        Dialog::Delete { files } => draw_delete_dialog(ctx, theme, files, size),
         Dialog::Copy { files, dest } => {
-            draw_copy_move_dialog(ctx, "Copy", files, dest, input_cursor, size)
+            draw_copy_move_dialog(ctx, theme, "Copy", files, dest, input_cursor, size)
         }
         Dialog::Move { files, dest } => {
-            draw_copy_move_dialog(ctx, "Rename/Move", files, dest, input_cursor, size)
+            draw_copy_move_dialog(ctx, theme, "Rename/Move", files, dest, input_cursor, size)
         }
-        Dialog::Info { message } => draw_info_dialog(ctx, message, size),
-        Dialog::Error { message } => draw_error_dialog(ctx, message, size),
+        Dialog::Info { message } => draw_info_dialog(ctx, theme, message, size),
+        Dialog::Error { message } => draw_error_dialog(ctx, theme, message, size),
         Dialog::ShellOutput {
             command,
             output,
             scroll,
-        } => draw_shell_output_dialog(ctx, command, output, *scroll, size),
-        Dialog::ConfirmQuit { save_settings } => draw_confirm_quit_dialog(ctx, save_settings, size),
+        } => draw_shell_output_dialog(ctx, theme, command, output, *scroll, size),
+        Dialog::ConfirmQuit { save_settings } => draw_confirm_quit_dialog(ctx, theme, save_settings, size),
         Dialog::SelectGroup { pattern, select } => {
-            draw_select_group_dialog(ctx, pattern, *select, input_cursor, size)
+            draw_select_group_dialog(ctx, theme, pattern, *select, input_cursor, size)
         }
-        Dialog::ChooseRoot { roots, cursor } => {
-            let strs: Vec<_> = roots
-                .iter()
-                .map(|p| p.to_string_lossy().into_owned())
-                .collect();
-            draw_list_dialog(
-                ctx,
-                "root-dialog",
-                "Change Root - Enter=OK  Esc=Cancel",
-                "Select root:",
-                &strs,
-                *cursor,
-                30,
-                size,
-            )
+        Dialog::ListSelect {
+            title,
+            prompt,
+            labels,
+            cursor,
+            min_width,
+            ..
+        } => {
+            draw_list_dialog(ctx, theme, "list-dialog", title, prompt, labels, *cursor, *min_width, size);
         }
-        Dialog::DirHistory { entries, cursor } => {
-            let strs: Vec<_> = entries
-                .iter()
-                .map(|p| p.to_string_lossy().into_owned())
-                .collect();
-            draw_list_dialog(
-                ctx,
-                "dirhist-dialog",
-                "Directory History - Enter=OK  Esc=Cancel",
-                "Recent directories:",
-                &strs,
-                *cursor,
-                40,
-                size,
-            )
-        }
-        Dialog::CmdHistory { entries, cursor } => draw_list_dialog(
-            ctx,
-            "cmdhist-dialog",
-            "Command History - Enter=OK  Esc=Cancel",
-            "Recent commands:",
-            entries,
-            *cursor,
-            40,
-            size,
-        ),
         Dialog::ConfirmOverwrite {
             target_name,
             is_copy,
             ..
-        } => draw_confirm_overwrite_dialog(ctx, target_name, *is_copy, size),
-        Dialog::ChooseSort { cursor } => {
-            let strs: Vec<_> = crate::state::SORT_OPTIONS
-                .iter()
-                .map(|(label, _)| *label)
-                .collect();
-            draw_list_dialog(
-                ctx,
-                "sort-dialog",
-                "Sort By - Enter=OK  Esc=Cancel",
-                "Sort mode:",
-                &strs,
-                *cursor,
-                25,
-                size,
-            )
-        }
+        } => draw_confirm_overwrite_dialog(ctx, theme, target_name, *is_copy, size),
     }
 }
 
@@ -991,6 +830,7 @@ const DIALOG_RED_60: DialogSpec = DialogSpec {
 
 fn dialog_begin(
     ctx: &mut Context,
+    theme: &Theme,
     spec: &DialogSpec,
     title: &str,
     height: CoordType,
@@ -1006,7 +846,7 @@ fn dialog_begin(
         height: h,
     });
     ctx.attr_background_rgba(ctx.indexed(spec.bg));
-    ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
+    ctx.attr_foreground_rgba(ctx.indexed(theme.dialog_fg));
     dialog_spacer(ctx, "sp-top");
     w
 }
@@ -1029,7 +869,7 @@ fn dialog_prompt(ctx: &mut Context, id: &'static str, text: &str) {
     ctx.label(id, text);
 }
 
-fn dialog_input(ctx: &mut Context, id: &'static str, text: &str, cursor: usize, width: CoordType) {
+fn dialog_input(ctx: &mut Context, theme: &Theme, id: &'static str, text: &str, cursor: usize, width: CoordType) {
     use ruf4_tui::framebuffer::Attributes;
 
     ctx.block_begin(id);
@@ -1037,8 +877,8 @@ fn dialog_input(ctx: &mut Context, id: &'static str, text: &str, cursor: usize, 
         width: width - 4,
         height: 1,
     });
-    ctx.attr_background_rgba(ctx.indexed(IndexedColor::Cyan));
-    ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::Black));
+    ctx.attr_background_rgba(ctx.indexed(theme.dialog_input_bg));
+    ctx.attr_foreground_rgba(ctx.indexed(theme.dialog_input_fg));
     {
         let byte_pos = text
             .char_indices()
@@ -1064,7 +904,7 @@ fn dialog_input(ctx: &mut Context, id: &'static str, text: &str, cursor: usize, 
     ctx.block_end();
 }
 
-fn dialog_file_list(ctx: &mut Context, files: &[String], max_show: usize, width: CoordType) {
+fn dialog_file_list(ctx: &mut Context, theme: &Theme, files: &[String], max_show: usize, width: CoordType) {
     for (i, name) in files.iter().enumerate().take(max_show) {
         ctx.next_block_id_mixin(i as u64);
         ctx.block_begin("file-entry");
@@ -1072,7 +912,7 @@ fn dialog_file_list(ctx: &mut Context, files: &[String], max_show: usize, width:
             width: width - 4,
             height: 1,
         });
-        ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightYellow));
+        ctx.attr_foreground_rgba(ctx.indexed(theme.dialog_file_list));
         {
             let entry = arena_format!(ctx.arena(), "  {name}");
             ctx.label("file-name", &entry);
@@ -1087,42 +927,33 @@ fn dialog_file_list(ctx: &mut Context, files: &[String], max_show: usize, width:
 
 // Individual dialogs
 
-fn draw_mkdir_dialog(ctx: &mut Context, name: &str, cursor: usize, size: Size) {
-    let w = dialog_begin(
-        ctx,
-        &DIALOG_BLUE_50,
-        "Make Directory - Enter=OK  Esc=Cancel",
-        6,
-        size,
-    );
+fn draw_mkdir_dialog(ctx: &mut Context, theme: &Theme, name: &str, cursor: usize, size: Size) {
+    let spec = DialogSpec { bg: theme.dialog_info_bg, ..DIALOG_BLUE_50 };
+    let w = dialog_begin(ctx, theme, &spec, "Make Directory - Enter=OK  Esc=Cancel", 6, size);
     dialog_prompt(ctx, "prompt", "Enter directory name:");
     dialog_spacer(ctx, "sp-mid");
-    dialog_input(ctx, "input", name, cursor, w);
+    dialog_input(ctx, theme, "input", name, cursor, w);
     dialog_end(ctx);
 }
 
-fn draw_rename_dialog(ctx: &mut Context, name: &str, cursor: usize, size: Size) {
-    let w = dialog_begin(
-        ctx,
-        &DIALOG_BLUE_50,
-        "Rename - Enter=OK  Esc=Cancel",
-        6,
-        size,
-    );
+fn draw_rename_dialog(ctx: &mut Context, theme: &Theme, name: &str, cursor: usize, size: Size) {
+    let spec = DialogSpec { bg: theme.dialog_info_bg, ..DIALOG_BLUE_50 };
+    let w = dialog_begin(ctx, theme, &spec, "Rename - Enter=OK  Esc=Cancel", 6, size);
     dialog_prompt(ctx, "prompt", "Enter new name:");
     dialog_spacer(ctx, "sp-mid");
-    dialog_input(ctx, "input", name, cursor, w);
+    dialog_input(ctx, theme, "input", name, cursor, w);
     dialog_end(ctx);
 }
 
-fn draw_delete_dialog(ctx: &mut Context, files: &[String], size: Size) {
+fn draw_delete_dialog(ctx: &mut Context, theme: &Theme, files: &[String], size: Size) {
     let max_name = files.iter().map(|f| f.len()).max().unwrap_or(0);
     let spec = DialogSpec {
+        bg: theme.dialog_error_bg,
         preferred_width: (max_name as CoordType + 10).max(DIALOG_RED_44.preferred_width),
         ..DIALOG_RED_44
     };
     let h = files.len() as CoordType + 5;
-    let w = dialog_begin(ctx, &spec, "Delete - Y/Enter=Delete  N/Esc=Cancel", h, size);
+    let w = dialog_begin(ctx, theme, &spec, "Delete - Y/Enter=Delete  N/Esc=Cancel", h, size);
     {
         let msg = if files.len() == 1 {
             arena_format!(ctx.arena(), "Delete \"{}\"?", files[0])
@@ -1132,21 +963,23 @@ fn draw_delete_dialog(ctx: &mut Context, files: &[String], size: Size) {
         dialog_prompt(ctx, "prompt", &msg);
         dialog_spacer(ctx, "sp-mid");
         let max_show = (h.min(size.height - 4) - 4).max(0) as usize;
-        dialog_file_list(ctx, files, max_show, w);
+        dialog_file_list(ctx, theme, files, max_show, w);
     }
     dialog_end(ctx);
 }
 
 fn draw_copy_move_dialog(
     ctx: &mut Context,
+    theme: &Theme,
     title: &str,
     files: &[String],
     dest: &str,
     cursor: usize,
     size: Size,
 ) {
+    let spec = DialogSpec { bg: theme.dialog_info_bg, ..DIALOG_BLUE_60 };
     let caption = arena_format!(ctx.arena(), "{title} - Enter=OK  Esc=Cancel");
-    let w = dialog_begin(ctx, &DIALOG_BLUE_60, &caption, 8, size);
+    let w = dialog_begin(ctx, theme, &spec, &caption, 8, size);
     {
         let msg = if files.len() == 1 {
             arena_format!(ctx.arena(), "{title} \"{}\" to:", files[0])
@@ -1155,20 +988,21 @@ fn draw_copy_move_dialog(
         };
         dialog_prompt(ctx, "prompt", &msg);
         dialog_spacer(ctx, "sp-mid");
-        dialog_input(ctx, "input", dest, cursor, w);
+        dialog_input(ctx, theme, "input", dest, cursor, w);
     }
     dialog_end(ctx);
 }
 
-fn draw_error_dialog(ctx: &mut Context, message: &str, size: Size) {
+fn draw_error_dialog(ctx: &mut Context, theme: &Theme, message: &str, size: Size) {
     let msg_width = message.lines().map(|l| l.len()).max().unwrap_or(10);
     let msg_lines = message.lines().count();
     let spec = DialogSpec {
+        bg: theme.dialog_error_bg,
         preferred_width: (msg_width as CoordType + 6).max(30),
         ..DIALOG_RED_44
     };
     let h = msg_lines as CoordType + 4;
-    let w = dialog_begin(ctx, &spec, "Error - Enter/Esc=Close", h, size);
+    let w = dialog_begin(ctx, theme, &spec, "Error - Enter/Esc=Close", h, size);
     {
         for (i, line) in message.lines().enumerate() {
             ctx.next_block_id_mixin(i as u64);
@@ -1184,15 +1018,16 @@ fn draw_error_dialog(ctx: &mut Context, message: &str, size: Size) {
     dialog_end(ctx);
 }
 
-fn draw_info_dialog(ctx: &mut Context, message: &str, size: Size) {
+fn draw_info_dialog(ctx: &mut Context, theme: &Theme, message: &str, size: Size) {
     let msg_width = message.lines().map(|l| l.len()).max().unwrap_or(10);
     let msg_lines = message.lines().count();
     let spec = DialogSpec {
+        bg: theme.dialog_info_bg,
         preferred_width: (msg_width as CoordType + 6).max(30),
         ..DIALOG_BLUE_50
     };
     let h = msg_lines as CoordType + 4;
-    let w = dialog_begin(ctx, &spec, "Info - Enter/Esc=Close", h, size);
+    let w = dialog_begin(ctx, theme, &spec, "Info - Enter/Esc=Close", h, size);
     {
         for (i, line) in message.lines().enumerate() {
             ctx.next_block_id_mixin(i as u64);
@@ -1208,13 +1043,17 @@ fn draw_info_dialog(ctx: &mut Context, message: &str, size: Size) {
     dialog_end(ctx);
 }
 
-fn draw_help_dialog(ctx: &mut Context, scroll: usize, size: Size) {
-    use crate::state::HELP_TEXT;
-
-    let key_width = HELP_TEXT.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
-    let max_line = HELP_TEXT
+fn draw_help_dialog(
+    ctx: &mut Context,
+    theme: &Theme,
+    help_text: &[(String, &str, Action)],
+    scroll: usize,
+    size: Size,
+) {
+    let key_width = help_text.iter().map(|(k, _, _)| k.len()).max().unwrap_or(0);
+    let max_line = help_text
         .iter()
-        .map(|(k, v)| {
+        .map(|(k, v, _)| {
             if k.is_empty() {
                 0
             } else {
@@ -1223,17 +1062,18 @@ fn draw_help_dialog(ctx: &mut Context, scroll: usize, size: Size) {
         })
         .max()
         .unwrap_or(20);
-    let total = HELP_TEXT.len() as CoordType;
+    let total = help_text.len() as CoordType;
     let max_visible = (size.height - 8).max(4);
     let content_h = total.min(max_visible);
     let h = content_h + 4;
     let spec = DialogSpec {
         preferred_width: (max_line as CoordType + 6).max(40),
+        bg: theme.dialog_info_bg,
         ..DIALOG_BLUE_50
     };
     let caption = if total > max_visible {
         let page = scroll + 1;
-        let pages = (HELP_TEXT.len() as f32 / max_visible as f32).ceil() as usize;
+        let pages = (help_text.len() as f32 / max_visible as f32).ceil() as usize;
         arena_format!(
             ctx.arena(),
             "Help ({page}/{pages}) - Up/Down=Scroll  Click=Run  Esc=Close"
@@ -1241,13 +1081,13 @@ fn draw_help_dialog(ctx: &mut Context, scroll: usize, size: Size) {
     } else {
         arena_format!(ctx.arena(), "Help - Click=Run  Esc=Close")
     };
-    let w = dialog_begin(ctx, &spec, &caption, h, size);
+    let w = dialog_begin(ctx, theme, &spec, &caption, h, size);
     {
         let visible = content_h as usize;
         for i in 0..visible {
             let idx = scroll + i;
-            let (key, desc) = if idx < HELP_TEXT.len() {
-                HELP_TEXT[idx]
+            let (key, desc) = if idx < help_text.len() {
+                (help_text[idx].0.as_str(), help_text[idx].1)
             } else {
                 ("", "")
             };
@@ -1272,6 +1112,7 @@ fn draw_help_dialog(ctx: &mut Context, scroll: usize, size: Size) {
 
 fn draw_shell_output_dialog(
     ctx: &mut Context,
+    theme: &Theme,
     command: &str,
     output: &str,
     scroll: usize,
@@ -1286,8 +1127,8 @@ fn draw_shell_output_dialog(
         width: w,
         height: h,
     });
-    ctx.attr_background_rgba(ctx.indexed(IndexedColor::Black));
-    ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::White));
+    ctx.attr_background_rgba(ctx.indexed(theme.dialog_shell_bg));
+    ctx.attr_foreground_rgba(ctx.indexed(theme.dialog_shell_fg));
     {
         let lines: Vec<&str> = output.lines().collect();
         let visible = (h - 2).max(1) as usize;
@@ -1302,7 +1143,7 @@ fn draw_shell_output_dialog(
                 width: w - 4,
                 height: 1,
             });
-            ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
+            ctx.attr_foreground_rgba(ctx.indexed(theme.dialog_shell_text));
             ctx.label("out-text", line);
             ctx.block_end();
         }
@@ -1310,7 +1151,7 @@ fn draw_shell_output_dialog(
         if lines.len() > visible {
             let indicator =
                 arena_format!(ctx.arena(), " [{}-{} of {}]", scroll + 1, end, lines.len());
-            ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightBlack));
+            ctx.attr_foreground_rgba(ctx.indexed(theme.dialog_shell_scroll_info));
             ctx.label("scroll-info", &indicator);
         }
     }
@@ -1319,6 +1160,7 @@ fn draw_shell_output_dialog(
 
 fn draw_select_group_dialog(
     ctx: &mut Context,
+    theme: &Theme,
     pattern: &str,
     select: bool,
     cursor: usize,
@@ -1329,7 +1171,8 @@ fn draw_select_group_dialog(
     } else {
         "Deselect Group - Enter=OK  Esc=Cancel"
     };
-    let w = dialog_begin(ctx, &DIALOG_BLUE_50, title, 6, size);
+    let spec = DialogSpec { bg: theme.dialog_info_bg, ..DIALOG_BLUE_50 };
+    let w = dialog_begin(ctx, theme, &spec, title, 6, size);
     {
         let prompt = if select {
             "Select files matching pattern:"
@@ -1338,15 +1181,16 @@ fn draw_select_group_dialog(
         };
         dialog_prompt(ctx, "prompt", prompt);
         dialog_spacer(ctx, "sp-mid");
-        dialog_input(ctx, "input", pattern, cursor, w);
+        dialog_input(ctx, theme, "input", pattern, cursor, w);
     }
     dialog_end(ctx);
 }
 
-fn draw_confirm_overwrite_dialog(ctx: &mut Context, target_name: &str, is_copy: bool, size: Size) {
+fn draw_confirm_overwrite_dialog(ctx: &mut Context, theme: &Theme, target_name: &str, is_copy: bool, size: Size) {
     let op = if is_copy { "Copy" } else { "Move" };
     let caption = arena_format!(ctx.arena(), "{op} - Y=Overwrite  N=Skip  A=All  Esc=Cancel");
-    dialog_begin(ctx, &DIALOG_RED_60, &caption, 4, size);
+    let spec = DialogSpec { bg: theme.dialog_error_bg, ..DIALOG_RED_60 };
+    dialog_begin(ctx, theme, &spec, &caption, 4, size);
     {
         let msg = arena_format!(ctx.arena(), "Overwrite \"{}\"?", target_name);
         dialog_prompt(ctx, "prompt", &msg);
@@ -1357,6 +1201,7 @@ fn draw_confirm_overwrite_dialog(ctx: &mut Context, target_name: &str, is_copy: 
 #[allow(clippy::too_many_arguments)]
 fn draw_list_dialog(
     ctx: &mut Context,
+    theme: &Theme,
     id: &'static str,
     caption: &str,
     prompt: &str,
@@ -1368,11 +1213,12 @@ fn draw_list_dialog(
     let max_len = entries.iter().map(|e| e.as_ref().len()).max().unwrap_or(10);
     let spec = DialogSpec {
         id,
+        bg: theme.dialog_info_bg,
         preferred_width: (max_len as CoordType + 8).max(min_width),
         ..DIALOG_BLUE_50
     };
     let h = entries.len() as CoordType + 4;
-    let w = dialog_begin(ctx, &spec, caption, h, size);
+    let w = dialog_begin(ctx, theme, &spec, caption, h, size);
     dialog_prompt(ctx, "prompt", prompt);
 
     let max_show = (h.min(size.height - 4) - 3).max(0) as usize;
@@ -1384,10 +1230,10 @@ fn draw_list_dialog(
             height: 1,
         });
         if i == cursor {
-            ctx.attr_background_rgba(ctx.indexed(IndexedColor::Cyan));
-            ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::Black));
+            ctx.attr_background_rgba(ctx.indexed(theme.dialog_list_cursor_bg));
+            ctx.attr_foreground_rgba(ctx.indexed(theme.dialog_list_cursor_fg));
         } else {
-            ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
+            ctx.attr_foreground_rgba(ctx.indexed(theme.dialog_list_fg));
         }
         ctx.label("list-name", entry.as_ref());
         ctx.block_end();
@@ -1396,13 +1242,14 @@ fn draw_list_dialog(
     dialog_end(ctx);
 }
 
-fn draw_confirm_quit_dialog(ctx: &mut Context, save_settings: &mut bool, size: Size) {
+fn draw_confirm_quit_dialog(ctx: &mut Context, theme: &Theme, save_settings: &mut bool, size: Size) {
     let spec = DialogSpec {
         id: "quit-dialog",
+        bg: theme.dialog_error_bg,
         preferred_width: 44,
         ..DIALOG_RED_44
     };
-    dialog_begin(ctx, &spec, "Quit - Y/Enter=Exit  N/Esc=Cancel", 6, size);
+    dialog_begin(ctx, theme, &spec, "Quit - Y/Enter=Exit  N/Esc=Cancel", 6, size);
     dialog_prompt(ctx, "prompt", "Do you want to quit ruf4?");
     ctx.label("spacer", "");
     ctx.checkbox("save-checkbox", "Save settings on exit", save_settings);

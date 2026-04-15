@@ -7,8 +7,10 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
+use crate::action::{self, Binding};
 use crate::panel::{SortBy, SortDir};
 use crate::state::{ActivePanel, MAX_HISTORY};
+use crate::theme::{self, Theme, THEME_FIELDS};
 
 const MAX_SETTINGS_SIZE: u64 = 1_048_576; // 1 MiB
 
@@ -26,6 +28,8 @@ pub struct Settings {
     pub quick_view: bool,
     pub dir_history: Vec<PathBuf>,
     pub cmd_history: Vec<String>,
+    pub bindings: Vec<Binding>,
+    pub theme: Theme,
 }
 
 fn sort_by_str(s: SortBy) -> &'static str {
@@ -128,6 +132,46 @@ impl Settings {
             }
         }
 
+        // Keybindings: start from defaults, apply saved overrides.
+        // Comma-separated format (`bind.<action>=Key1,Key2,...`) replaces all default
+        // bindings for that action.  A single key (no comma) is treated as a legacy
+        // entry and added alongside the defaults to avoid losing existing bindings.
+        let mut bindings = action::default_bindings();
+        for (key, value) in &map {
+            if let Some(action_name) = key.strip_prefix("bind.") {
+                if let Some(action) = action::parse_action(action_name) {
+                    if value.contains(',') {
+                        // New format: full replacement.
+                        let parsed_keys: Vec<_> = value
+                            .split(',')
+                            .filter_map(|s| action::parse_key_name(s.trim()))
+                            .collect();
+                        if !parsed_keys.is_empty() {
+                            bindings.retain(|b| b.action != action);
+                            for input_key in parsed_keys {
+                                bindings.push(Binding { key: input_key, action });
+                            }
+                        }
+                    } else if let Some(input_key) = action::parse_key_name(value) {
+                        // Legacy format: add if not already present.
+                        if !bindings.iter().any(|b| b.action == action && b.key == input_key) {
+                            bindings.push(Binding { key: input_key, action });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Theme: start from defaults, override with saved colors.
+        let mut theme_val = Theme::far();
+        for (key, value) in &map {
+            if let Some(field_name) = key.strip_prefix("theme.") {
+                if let Some(color) = theme::parse_color(value) {
+                    theme_val.set_field(field_name, color);
+                }
+            }
+        }
+
         Some(Self {
             left,
             right,
@@ -135,6 +179,8 @@ impl Settings {
             quick_view,
             dir_history,
             cmd_history,
+            bindings,
+            theme: theme_val,
         })
     }
 
@@ -178,6 +224,47 @@ quick_view={}\n",
             content.push_str(&format!("cmd_history.{i}={cmd}\n"));
         }
 
+        // Keybindings: for each action whose key set differs from defaults,
+        // save all keys (comma-separated).
+        let defaults = action::default_bindings();
+        let mut saved_actions = Vec::new();
+        for binding in &self.bindings {
+            if saved_actions.contains(&action::action_str(binding.action)) {
+                continue;
+            }
+            let action_name = action::action_str(binding.action);
+            let current_keys: Vec<_> = self.bindings.iter()
+                .filter(|b| b.action == binding.action)
+                .map(|b| b.key)
+                .collect();
+            let default_keys: Vec<_> = defaults.iter()
+                .filter(|b| b.action == binding.action)
+                .map(|b| b.key)
+                .collect();
+            if current_keys != default_keys {
+                let key_strs: Vec<_> = current_keys.iter()
+                    .map(|k| action::key_display_name(*k))
+                    .collect();
+                content.push_str(&format!("bind.{}={}\n", action_name, key_strs.join(",")));
+                saved_actions.push(action_name);
+            }
+        }
+
+        // Theme: save only colors that differ from the default theme.
+        let default_theme = Theme::far();
+        for &field in THEME_FIELDS {
+            if let (Some(current), Some(default)) =
+                (self.theme.get_field(field), default_theme.get_field(field))
+            {
+                if theme::color_str(current) != theme::color_str(default) {
+                    content.push_str(&format!(
+                        "theme.{field}={}\n",
+                        theme::color_str(current),
+                    ));
+                }
+            }
+        }
+
         fs::write(&path, content).map_err(|e| format!("cannot write settings: {e}"))
     }
 }
@@ -214,6 +301,8 @@ pub fn settings_from_state(state: &crate::state::State) -> Settings {
         quick_view: state.quick_view,
         dir_history: state.dir_history.clone(),
         cmd_history: state.cmd_history.clone(),
+        bindings: state.bindings.clone(),
+        theme: state.theme.clone(),
     }
 }
 
