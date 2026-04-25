@@ -92,6 +92,7 @@ pub struct Binding {
 /// The first matching key wins in `lookup`. Modifier
 /// combinations are encoded into the key via `kbmod::*`.
 pub fn default_bindings() -> Vec<Binding> {
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
     let mut bindings = vec![
         // Function keys (on macOS these need Fn; Ctrl alternatives below).
         Binding {
