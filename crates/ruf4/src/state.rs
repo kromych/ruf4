@@ -9,11 +9,13 @@ use std::time::Instant;
 use ruf4_tui::helpers::*;
 use ruf4_tui::input::{Input, InputKey, InputMouseState, kbmod, vk};
 
+use crate::action::{self, Action, Binding};
 use crate::fileops;
 use crate::panel::{Panel, SortBy};
 use crate::platform;
 use crate::preview::{self, Preview};
 use crate::settings;
+use crate::theme::Theme;
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -32,44 +34,6 @@ const LIST_DIALOG_BORDER: CoordType = 2;
 /// Rows from dialog top to first list entry (border + spacer + prompt).
 const LIST_DIALOG_ENTRY_OFFSET: CoordType = 3;
 
-pub const HELP_TEXT: &[(&str, &str)] = &[
-    ("F1", "Help"),
-    ("F2", "Save settings"),
-    ("F3 / Ctrl+Q", "Toggle quick view"),
-    ("F4", "Rename"),
-    ("F5", "Copy"),
-    ("F6", "Rename / Move"),
-    ("F7", "Make directory"),
-    ("F8 / Delete", "Delete"),
-    ("F9", "Focus menubar"),
-    ("F10", "Quit"),
-    ("", ""),
-    ("Up / Down", "Navigate"),
-    ("PgUp / PgDn", "Scroll by page"),
-    ("Home / End", "First / last entry"),
-    ("Enter", "Open file / enter dir"),
-    ("Tab", "Switch panel"),
-    ("Backspace", "Parent directory"),
-    ("", ""),
-    ("Ins / Shift+Space", "Toggle selection"),
-    ("+", "Select group"),
-    ("-", "Deselect group"),
-    ("*", "Invert selection"),
-    ("Ctrl+A", "Select all"),
-    ("", ""),
-    ("Ctrl+G", "Change root"),
-    ("Ctrl+D", "Directory history"),
-    ("Ctrl+E", "Command history"),
-    ("Ctrl+R", "Refresh panels"),
-    ("Ctrl+H", "Toggle hidden files"),
-    ("Ctrl+F3", "Sort by name"),
-    ("Ctrl+F4", "Sort by extension"),
-    ("Ctrl+F5", "Sort by date"),
-    ("Ctrl+F6", "Sort by size"),
-    ("", ""),
-    ("Alt+letters", "Quick search by name"),
-];
-
 pub const SORT_OPTIONS: &[(&str, SortBy)] = &[
     ("Name", SortBy::Name),
     ("Extension", SortBy::Extension),
@@ -83,6 +47,15 @@ pub const SORT_OPTIONS: &[(&str, SortBy)] = &[
 pub enum ActivePanel {
     Left,
     Right,
+}
+
+/// What a list-selection dialog should do when the user picks an item.
+#[derive(Clone)]
+pub enum ListSelectKind {
+    ChangeRoot { roots: Vec<PathBuf> },
+    DirHistory { entries: Vec<PathBuf> },
+    CmdHistory { entries: Vec<String> },
+    ChooseSort,
 }
 
 pub enum Dialog {
@@ -122,17 +95,14 @@ pub enum Dialog {
         pattern: String,
         select: bool,
     },
-    ChooseRoot {
-        roots: Vec<PathBuf>,
+    /// Unified list-selection dialog (roots, history, sort, etc.).
+    ListSelect {
+        title: String,
+        prompt: String,
+        labels: Vec<String>,
         cursor: usize,
-    },
-    DirHistory {
-        entries: Vec<PathBuf>,
-        cursor: usize,
-    },
-    CmdHistory {
-        entries: Vec<String>,
-        cursor: usize,
+        min_width: CoordType,
+        kind: ListSelectKind,
     },
     ConfirmOverwrite {
         target_name: String,
@@ -142,9 +112,6 @@ pub enum Dialog {
     },
     Rename {
         name: String,
-    },
-    ChooseSort {
-        cursor: usize,
     },
 }
 
@@ -168,6 +135,9 @@ pub struct State {
     pub input_cursor: usize, // cursor position (char index) in text-input dialogs
     pub dir_history: Vec<PathBuf>,
     pub cmd_history: Vec<String>,
+    pub bindings: Vec<Binding>,
+    pub help_text: Vec<(String, &'static str, Action)>,
+    pub theme: Theme,
     last_click: Option<(Instant, Point)>,
 }
 
@@ -182,6 +152,9 @@ impl Default for State {
 impl State {
     pub fn new() -> Self {
         let cwd = std::env::current_dir().unwrap_or_else(|_| "/".into());
+        let bindings = action::default_bindings();
+        let help_text = action::build_help_text(&bindings);
+        let theme = Theme::far();
         let mut state = Self {
             left: Panel::new(cwd.clone()),
             right: Panel::new(cwd),
@@ -205,6 +178,9 @@ impl State {
             input_cursor: 0,
             dir_history: Vec::new(),
             cmd_history: Vec::new(),
+            bindings,
+            help_text,
+            theme,
             last_click: None,
         };
 
@@ -215,12 +191,18 @@ impl State {
             state.quick_view = s.quick_view;
             state.dir_history = s.dir_history;
             state.cmd_history = s.cmd_history;
+            state.bindings = s.bindings;
+            state.help_text = action::build_help_text(&state.bindings);
+            state.theme = s.theme;
         }
 
         state
     }
 
     pub fn for_testing(left: Panel, right: Panel) -> Self {
+        let bindings = action::default_bindings();
+        let help_text = action::build_help_text(&bindings);
+        let theme = Theme::far();
         Self {
             left,
             right,
@@ -244,6 +226,9 @@ impl State {
             input_cursor: 0,
             dir_history: Vec::new(),
             cmd_history: Vec::new(),
+            bindings,
+            help_text,
+            theme,
             last_click: None,
         }
     }
@@ -275,6 +260,121 @@ impl State {
         match self.active {
             ActivePanel::Left => &mut self.right,
             ActivePanel::Right => &mut self.left,
+        }
+    }
+
+    // ── Central action dispatch ─────────────────────────────────────────
+
+    /// Execute a single action. This is the central dispatch point: keybindings,
+    /// menu items, function-bar clicks, and help-row clicks all funnel here.
+    pub fn execute_action(&mut self, action: Action) {
+        match action {
+            // Navigation
+            Action::CursorUp => self.active_panel_mut().cursor_up(1),
+            Action::CursorDown => self.active_panel_mut().cursor_down(1),
+            Action::PageUp => self.active_panel_mut().cursor_up(PAGE_SCROLL),
+            Action::PageDown => self.active_panel_mut().cursor_down(PAGE_SCROLL),
+            Action::CursorHome => self.active_panel_mut().cursor_home(),
+            Action::CursorEnd => self.active_panel_mut().cursor_end(),
+            Action::OpenOrEnter => self.open_or_enter(),
+            Action::ParentDir => {
+                // Go up one directory (Backspace).
+                if self.active_panel().path.parent().is_some() {
+                    self.active_panel_mut().cursor = 0; // ".." is always first
+                    self.open_or_enter();
+                }
+            }
+            Action::SwitchPanel => {
+                self.active = match self.active {
+                    ActivePanel::Left => ActivePanel::Right,
+                    ActivePanel::Right => ActivePanel::Left,
+                };
+            }
+
+            // Selection
+            Action::ToggleSelect => self.active_panel_mut().toggle_select(),
+            Action::SelectGroup => {
+                self.input_cursor = 1;
+                self.dialog = Dialog::SelectGroup {
+                    pattern: "*".to_string(),
+                    select: true,
+                };
+            }
+            Action::DeselectGroup => {
+                self.input_cursor = 1;
+                self.dialog = Dialog::SelectGroup {
+                    pattern: "*".to_string(),
+                    select: false,
+                };
+            }
+            Action::InvertSelection => self.active_panel_mut().invert_selection(),
+            Action::SelectAll => self.active_panel_mut().select_all(),
+            Action::DeselectAll => self.active_panel_mut().clear_selection(),
+
+            // File operations
+            Action::Copy => self.open_copy_dialog(),
+            Action::Move => self.open_move_dialog(),
+            Action::Rename => self.open_rename_dialog(),
+            Action::Delete => self.open_delete_dialog(),
+            Action::MkDir => {
+                self.input_cursor = 0;
+                self.dialog = Dialog::MkDir {
+                    name: String::new(),
+                };
+            }
+
+            // View / sort
+            Action::ToggleQuickView => {
+                self.quick_view = !self.quick_view;
+                if self.quick_view {
+                    self.preview_path = None;
+                }
+            }
+            Action::ToggleHidden => {
+                let panel = self.active_panel_mut();
+                panel.show_hidden = !panel.show_hidden;
+                panel.refresh();
+            }
+            Action::SortBy(sort_by) => self.active_panel_mut().set_sort(sort_by),
+            Action::ChooseSort => {
+                let cursor = SORT_OPTIONS
+                    .iter()
+                    .position(|(_, s)| *s == self.active_panel().sort_by)
+                    .unwrap_or(0);
+                let labels = SORT_OPTIONS.iter().map(|(l, _)| l.to_string()).collect();
+                self.dialog = Dialog::ListSelect {
+                    title: "Sort By - Enter=OK  Esc=Cancel".to_string(),
+                    prompt: "Sort mode:".to_string(),
+                    labels,
+                    cursor,
+                    min_width: 25,
+                    kind: ListSelectKind::ChooseSort,
+                };
+            }
+
+            // App
+            Action::Help => self.dialog = Dialog::Help { scroll: 0 },
+            Action::SaveSettings => match self.save_settings() {
+                Ok(()) => {
+                    self.dialog = Dialog::Info {
+                        message: "Settings saved.".to_string(),
+                    };
+                }
+                Err(msg) => self.dialog = Dialog::Error { message: msg },
+            },
+            Action::Refresh => {
+                self.left.refresh();
+                self.right.refresh();
+            }
+            Action::ChangeRoot => self.open_choose_root(),
+            Action::DirHistory => self.open_dir_history(),
+            Action::CmdHistory => self.open_cmd_history(),
+            Action::FocusMenu => self.want_menu_focus = true,
+            Action::Quit => {
+                self.dialog = Dialog::ConfirmQuit {
+                    save_settings: true,
+                };
+            }
         }
     }
 
@@ -319,7 +419,15 @@ impl State {
             return;
         }
         let entries = self.cmd_history.clone();
-        self.dialog = Dialog::CmdHistory { entries, cursor: 0 };
+        let labels = entries.clone();
+        self.dialog = Dialog::ListSelect {
+            title: "Command History - Enter=OK  Esc=Cancel".to_string(),
+            prompt: "Recent commands:".to_string(),
+            labels,
+            cursor: 0,
+            min_width: 40,
+            kind: ListSelectKind::CmdHistory { entries },
+        };
     }
 
     pub fn open_dir_history(&mut self) {
@@ -330,7 +438,18 @@ impl State {
             return;
         }
         let entries = self.dir_history.clone();
-        self.dialog = Dialog::DirHistory { entries, cursor: 0 };
+        let labels = entries
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        self.dialog = Dialog::ListSelect {
+            title: "Directory History - Enter=OK  Esc=Cancel".to_string(),
+            prompt: "Recent directories:".to_string(),
+            labels,
+            cursor: 0,
+            min_width: 40,
+            kind: ListSelectKind::DirHistory { entries },
+        };
     }
 
     pub fn open_choose_root(&mut self) {
@@ -343,7 +462,18 @@ impl State {
             .iter()
             .position(|r| current.starts_with(r))
             .unwrap_or(0);
-        self.dialog = Dialog::ChooseRoot { roots, cursor };
+        let labels = roots
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        self.dialog = Dialog::ListSelect {
+            title: "Change Root - Enter=OK  Esc=Cancel".to_string(),
+            prompt: "Select root:".to_string(),
+            labels,
+            cursor,
+            min_width: 30,
+            kind: ListSelectKind::ChangeRoot { roots },
+        };
     }
 
     pub fn open_copy_dialog(&mut self) {
@@ -488,21 +618,9 @@ impl State {
     fn handle_text(&mut self, text: &str) {
         self.alt_search.clear();
         match text {
-            "+" => {
-                self.input_cursor = 1;
-                self.dialog = Dialog::SelectGroup {
-                    pattern: "*".to_string(),
-                    select: true,
-                }
-            }
-            "-" => {
-                self.input_cursor = 1;
-                self.dialog = Dialog::SelectGroup {
-                    pattern: "*".to_string(),
-                    select: false,
-                }
-            }
-            "*" => self.active_panel_mut().invert_selection(),
+            "+" => self.execute_action(Action::SelectGroup),
+            "-" => self.execute_action(Action::DeselectGroup),
+            "*" => self.execute_action(Action::InvertSelection),
             _ => {
                 self.command_line_active = true;
                 self.command_line.clear();
@@ -524,33 +642,19 @@ impl State {
         // Any non-Alt-letter key ends the quick search.
         self.alt_search.clear();
 
-        match key {
-            k if k == vk::ESCAPE => {}
-            k if k == vk::F10 => {
-                self.dialog = Dialog::ConfirmQuit {
-                    save_settings: true,
-                };
-            }
-            k if k == vk::TAB => {
-                self.active = match self.active {
-                    ActivePanel::Left => ActivePanel::Right,
-                    ActivePanel::Right => ActivePanel::Left,
-                };
-            }
-            k if k == vk::UP => self.active_panel_mut().cursor_up(1),
-            k if k == vk::DOWN => self.active_panel_mut().cursor_down(1),
-            k if k == vk::HOME => self.active_panel_mut().cursor_home(),
-            k if k == vk::END => self.active_panel_mut().cursor_end(),
-            k if k == vk::PRIOR => self.active_panel_mut().cursor_up(PAGE_SCROLL),
-            k if k == vk::NEXT => self.active_panel_mut().cursor_down(PAGE_SCROLL),
-            k if k == vk::RETURN => self.open_or_enter(),
-            k if k == vk::INSERT || k == (kbmod::SHIFT | vk::SPACE) => {
-                self.active_panel_mut().toggle_select();
-            }
-            k if k == vk::DELETE => self.open_delete_dialog(),
-            // F1-F9, Ctrl+keys handled via consume_shortcut in draw.rs.
-            _ => {}
+        // Escape is always dismiss / no-op at top level.
+        if key == vk::ESCAPE {
+            return;
         }
+
+        // Look up the key in the binding table and dispatch the action.
+        // The draw pass also calls consume_shortcut() for the same keys,
+        // but only to mark the input as consumed by the TUI — it must NOT
+        // call execute_action() again (see draw_menubar).
+        if let Some(act) = action::lookup(&self.bindings, key) {
+            self.execute_action(act);
+        }
+        // Unknown keys are silently ignored.
     }
 
     fn handle_mouse(&mut self, mouse: &ruf4_tui::input::InputMouse) {
@@ -600,7 +704,7 @@ impl State {
 
             // Panel title row (path): click opens choose-root dialog.
             if y == PANEL_TITLE_ROW {
-                self.open_choose_root();
+                self.execute_action(Action::ChangeRoot);
                 return;
             }
 
@@ -661,10 +765,6 @@ impl State {
         };
 
         // Footer text starts after the panel's left border (1 cell in).
-        // Both panels use the same offset: panel_left + 1 (border).
-        // draw_single_panel sets intrinsic_size to (width-2, height-2) so that
-        // intrinsic_to_outer() == (width, height), matching the table column spec.
-        // No column expansion occurs, so both panels start at their exact column.
         let panel_width = self.term_size.width / 2;
         let panel_left = if clicked_left { 0 } else { panel_width };
         let text_origin = panel_left + 1;
@@ -673,11 +773,7 @@ impl State {
         if let Some(sort_start) = footer.find("Sort:") {
             let sort_end = sort_start + 5 + sort_label.len() + 1; // "Sort:" + label + arrow
             if lx >= sort_start && lx < sort_end {
-                let cursor = SORT_OPTIONS
-                    .iter()
-                    .position(|(_, s)| *s == panel.sort_by)
-                    .unwrap_or(0);
-                self.dialog = Dialog::ChooseSort { cursor };
+                self.execute_action(Action::ChooseSort);
                 return;
             }
         }
@@ -701,39 +797,23 @@ impl State {
             return;
         }
         let slot = (x / slot_width).min(9);
-        match slot {
-            0 => self.dialog = Dialog::Help { scroll: 0 },
-            1 => match self.save_settings() {
-                Ok(()) => {
-                    self.dialog = Dialog::Info {
-                        message: "Settings saved.".to_string(),
-                    };
-                }
-                Err(msg) => self.dialog = Dialog::Error { message: msg },
-            },
-            2 => {
-                self.quick_view = !self.quick_view;
-                if self.quick_view {
-                    self.preview_path = None;
-                }
-            }
-            3 => self.open_rename_dialog(),
-            4 => self.open_copy_dialog(),
-            5 => self.open_move_dialog(),
-            6 => {
-                self.input_cursor = 0;
-                self.dialog = Dialog::MkDir {
-                    name: String::new(),
-                }
-            }
-            7 => self.open_delete_dialog(),
-            8 => self.want_menu_focus = true,
-            9 => {
-                self.dialog = Dialog::ConfirmQuit {
-                    save_settings: true,
-                }
-            }
-            _ => {}
+        // F1..F10 map to slots 0..9; reuse the binding table.
+        let fkeys = [
+            vk::F1,
+            vk::F2,
+            vk::F3,
+            vk::F4,
+            vk::F5,
+            vk::F6,
+            vk::F7,
+            vk::F8,
+            vk::F9,
+            vk::F10,
+        ];
+        if let Some(&fk) = fkeys.get(slot as usize)
+            && let Some(act) = action::lookup(&self.bindings, fk)
+        {
+            self.execute_action(act);
         }
     }
 
@@ -798,7 +878,7 @@ impl State {
                 } else if key == vk::END {
                     self.cmd_cursor = self.command_line.chars().count();
                 } else {
-                    // Tab, Up, Down, function keys — let them fall through.
+                    // Tab, Up, Down, function keys -- let them fall through.
                     return false;
                 }
                 true
@@ -830,10 +910,7 @@ impl State {
             }
             Dialog::ConfirmOverwrite { .. } => self.handle_overwrite_dialog(ev),
             Dialog::ShellOutput { .. } => self.handle_scrollable_dialog(ev),
-            Dialog::ChooseRoot { .. } => self.handle_choose_root_dialog(ev),
-            Dialog::DirHistory { .. } => self.handle_dir_history_dialog(ev),
-            Dialog::CmdHistory { .. } => self.handle_cmd_history_dialog(ev),
-            Dialog::ChooseSort { .. } => self.handle_choose_sort_dialog(ev),
+            Dialog::ListSelect { .. } => self.handle_list_select_dialog(ev),
         }
     }
 
@@ -993,7 +1070,7 @@ impl State {
     }
 
     fn handle_overwrite_dialog(&mut self, ev: &Input) {
-        enum Action {
+        enum OverwriteAction {
             Yes,
             No,
             All,
@@ -1001,12 +1078,12 @@ impl State {
             None,
         }
         let action = match ev {
-            Input::Text("y" | "Y") => Action::Yes,
-            Input::Text("n" | "N") => Action::No,
-            Input::Text("a" | "A") => Action::All,
-            Input::Keyboard(key) if *key == vk::RETURN => Action::Yes,
-            Input::Keyboard(key) if *key == vk::ESCAPE => Action::Cancel,
-            _ => Action::None,
+            Input::Text("y" | "Y") => OverwriteAction::Yes,
+            Input::Text("n" | "N") => OverwriteAction::No,
+            Input::Text("a" | "A") => OverwriteAction::All,
+            Input::Keyboard(key) if *key == vk::RETURN => OverwriteAction::Yes,
+            Input::Keyboard(key) if *key == vk::ESCAPE => OverwriteAction::Cancel,
+            _ => OverwriteAction::None,
         };
 
         let Dialog::ConfirmOverwrite {
@@ -1020,7 +1097,7 @@ impl State {
         };
 
         match action {
-            Action::Yes => {
+            OverwriteAction::Yes => {
                 let is_copy = *is_copy;
                 let mut pending = std::mem::take(pending);
                 let mut errors = std::mem::take(errors);
@@ -1030,14 +1107,14 @@ impl State {
                 pending.remove(0);
                 fileops::continue_copy_move(self, pending, errors, is_copy);
             }
-            Action::No => {
+            OverwriteAction::No => {
                 let is_copy = *is_copy;
                 let mut pending = std::mem::take(pending);
                 let errors = std::mem::take(errors);
                 pending.remove(0);
                 fileops::continue_copy_move(self, pending, errors, is_copy);
             }
-            Action::All => {
+            OverwriteAction::All => {
                 let is_copy = *is_copy;
                 let pending = std::mem::take(pending);
                 let mut errors = std::mem::take(errors);
@@ -1046,11 +1123,11 @@ impl State {
                 }
                 fileops::finish_operation(self, errors, false);
             }
-            Action::Cancel => {
+            OverwriteAction::Cancel => {
                 let errors = std::mem::take(errors);
                 fileops::finish_operation(self, errors, false);
             }
-            Action::None => {}
+            OverwriteAction::None => {}
         }
     }
 
@@ -1082,8 +1159,9 @@ impl State {
         }
     }
 
-    fn handle_choose_root_dialog(&mut self, ev: &Input) {
-        // Handle dismiss/navigate first (needs full &mut self).
+    /// Unified list-selection dialog handler.
+    fn handle_list_select_dialog(&mut self, ev: &Input) {
+        // Dismiss / commit (needs full &mut self).
         if let Input::Keyboard(key) = ev {
             let key = *key;
             if key == vk::ESCAPE {
@@ -1091,29 +1169,25 @@ impl State {
                 return;
             }
             if key == vk::RETURN {
-                if let Dialog::ChooseRoot { roots, cursor } = &self.dialog {
-                    let path = roots[*cursor].clone();
-                    self.choose_root(path);
-                }
+                self.commit_list_select();
                 return;
             }
         }
 
-        // Handle mouse (may dismiss or navigate on double-click).
+        // Mouse: navigate or double-click to commit.
         if let Input::Mouse(mouse) = ev
             && mouse.state == InputMouseState::Left
         {
-            let Dialog::ChooseRoot { roots, cursor } = &mut self.dialog else {
+            let Dialog::ListSelect { labels, cursor, .. } = &mut self.dialog else {
                 return;
             };
             let is_double = detect_double_click(&mut self.last_click, mouse.position);
             if let Some(idx) =
-                list_dialog_hit_index(mouse.position.y, roots.len(), self.term_size.height)
+                list_dialog_hit_index(mouse.position.y, labels.len(), self.term_size.height)
             {
                 *cursor = idx;
                 if is_double {
-                    let path = roots[idx].clone();
-                    self.choose_root(path);
+                    self.commit_list_select();
                 }
             } else {
                 self.dialog = Dialog::None;
@@ -1122,123 +1196,50 @@ impl State {
         }
 
         // Navigation keys within the list.
-        let Dialog::ChooseRoot { roots, cursor } = &mut self.dialog else {
+        let Dialog::ListSelect { labels, cursor, .. } = &mut self.dialog else {
             return;
         };
         if let Input::Keyboard(key) = ev {
-            list_nav_key(*key, cursor, roots.len());
+            list_nav_key(*key, cursor, labels.len());
         }
     }
 
-    fn handle_dir_history_dialog(&mut self, ev: &Input) {
-        // Handle dismiss/navigate first (needs full &mut self).
-        if let Input::Keyboard(key) = ev {
-            let key = *key;
-            if key == vk::ESCAPE {
-                self.dialog = Dialog::None;
-                return;
+    /// Commit the list-selection dialog: extract the selected item and dispatch
+    /// based on the dialog's `kind`.
+    fn commit_list_select(&mut self) {
+        let Dialog::ListSelect { cursor, kind, .. } =
+            std::mem::replace(&mut self.dialog, Dialog::None)
+        else {
+            return;
+        };
+
+        match kind {
+            ListSelectKind::ChangeRoot { roots } => {
+                if let Some(path) = roots.into_iter().nth(cursor) {
+                    self.choose_root(path);
+                }
             }
-            if key == vk::RETURN {
-                if let Dialog::DirHistory { entries, cursor } = &self.dialog {
-                    let path = entries[*cursor].clone();
-                    self.dialog = Dialog::None;
+            ListSelectKind::DirHistory { entries } => {
+                if let Some(path) = entries.into_iter().nth(cursor) {
                     let panel = self.active_panel_mut();
                     panel.path = path;
                     panel.cursor = 0;
                     panel.scroll_offset = 0;
                     panel.refresh();
                 }
-                return;
             }
-        }
-
-        // Handle mouse (may dismiss or navigate on double-click).
-        if let Input::Mouse(mouse) = ev
-            && mouse.state == InputMouseState::Left
-        {
-            let Dialog::DirHistory { entries, cursor } = &mut self.dialog else {
-                return;
-            };
-            let is_double = detect_double_click(&mut self.last_click, mouse.position);
-            if let Some(idx) =
-                list_dialog_hit_index(mouse.position.y, entries.len(), self.term_size.height)
-            {
-                *cursor = idx;
-                if is_double {
-                    let path = entries[idx].clone();
-                    self.dialog = Dialog::None;
-                    let panel = self.active_panel_mut();
-                    panel.path = path;
-                    panel.cursor = 0;
-                    panel.scroll_offset = 0;
-                    panel.refresh();
-                }
-            } else {
-                self.dialog = Dialog::None;
-            }
-            return;
-        }
-
-        // Navigation keys within the list.
-        let Dialog::DirHistory { entries, cursor } = &mut self.dialog else {
-            return;
-        };
-        if let Input::Keyboard(key) = ev {
-            list_nav_key(*key, cursor, entries.len());
-        }
-    }
-
-    fn handle_cmd_history_dialog(&mut self, ev: &Input) {
-        // Handle dismiss/select first (needs full &mut self).
-        if let Input::Keyboard(key) = ev {
-            let key = *key;
-            if key == vk::ESCAPE {
-                self.dialog = Dialog::None;
-                return;
-            }
-            if key == vk::RETURN {
-                if let Dialog::CmdHistory { entries, cursor } = &self.dialog {
-                    let cmd = entries[*cursor].clone();
-                    self.dialog = Dialog::None;
+            ListSelectKind::CmdHistory { entries } => {
+                if let Some(cmd) = entries.into_iter().nth(cursor) {
                     self.cmd_cursor = cmd.chars().count();
                     self.command_line = cmd;
                     self.command_line_active = true;
                 }
-                return;
             }
-        }
-
-        // Handle mouse.
-        if let Input::Mouse(mouse) = ev
-            && mouse.state == InputMouseState::Left
-        {
-            let Dialog::CmdHistory { entries, cursor } = &mut self.dialog else {
-                return;
-            };
-            let is_double = detect_double_click(&mut self.last_click, mouse.position);
-            if let Some(idx) =
-                list_dialog_hit_index(mouse.position.y, entries.len(), self.term_size.height)
-            {
-                *cursor = idx;
-                if is_double {
-                    let cmd = entries[idx].clone();
-                    self.dialog = Dialog::None;
-                    self.cmd_cursor = cmd.chars().count();
-                    self.command_line = cmd;
-                    self.command_line_active = true;
+            ListSelectKind::ChooseSort => {
+                if let Some((_, sort_by)) = SORT_OPTIONS.get(cursor) {
+                    self.active_panel_mut().set_sort(*sort_by);
                 }
-            } else {
-                self.dialog = Dialog::None;
             }
-            return;
-        }
-
-        // Navigation keys within the list.
-        let Dialog::CmdHistory { entries, cursor } = &mut self.dialog else {
-            return;
-        };
-        if let Input::Keyboard(key) = ev {
-            list_nav_key(*key, cursor, entries.len());
         }
     }
 
@@ -1257,7 +1258,8 @@ impl State {
             let Dialog::Help { scroll } = &self.dialog else {
                 return;
             };
-            let idx = help_dialog_hit_index(mouse.position.y, *scroll, self.term_size);
+            let help_len = self.help_text.len();
+            let idx = help_dialog_hit_index(mouse.position.y, *scroll, help_len, self.term_size);
             self.dialog = Dialog::None;
             if let Some(i) = idx {
                 self.invoke_help_action(i);
@@ -1266,12 +1268,11 @@ impl State {
         }
 
         // Scroll navigation.
+        let help_len = self.help_text.len();
         let Dialog::Help { scroll } = &mut self.dialog else {
             return;
         };
-        let max_scroll = HELP_TEXT
-            .len()
-            .saturating_sub((self.term_size.height - 8).max(4) as usize);
+        let max_scroll = help_len.saturating_sub((self.term_size.height - 8).max(4) as usize);
         if let Input::Keyboard(key) = ev {
             let key = *key;
             if key == vk::UP {
@@ -1299,106 +1300,11 @@ impl State {
     }
 
     fn invoke_help_action(&mut self, idx: usize) {
-        let Some((key, _)) = HELP_TEXT.get(idx) else {
-            return;
-        };
-        match *key {
-            "F1" => self.dialog = Dialog::Help { scroll: 0 },
-            "F2" => match self.save_settings() {
-                Ok(()) => {
-                    self.dialog = Dialog::Info {
-                        message: "Settings saved.".to_string(),
-                    };
-                }
-                Err(msg) => self.dialog = Dialog::Error { message: msg },
-            },
-            "F3 / Ctrl+Q" => {
-                self.quick_view = !self.quick_view;
-                if self.quick_view {
-                    self.update_preview();
-                }
+        if let Some((key_str, _, action)) = self.help_text.get(idx) {
+            if key_str.is_empty() {
+                return; // separator row
             }
-            "F4" => self.open_rename_dialog(),
-            "F5" => self.open_copy_dialog(),
-            "F6" => self.open_move_dialog(),
-            "F7" => {
-                self.input_cursor = 0;
-                self.dialog = Dialog::MkDir {
-                    name: String::new(),
-                };
-            }
-            "F8 / Delete" => self.open_delete_dialog(),
-            "F9" => self.want_menu_focus = true,
-            "F10" => {
-                self.dialog = Dialog::ConfirmQuit {
-                    save_settings: true,
-                };
-            }
-            "Ctrl+G" => self.open_choose_root(),
-            "Ctrl+D" => self.open_dir_history(),
-            "Ctrl+E" => self.open_cmd_history(),
-            "Ctrl+R" => {
-                self.left.refresh();
-                self.right.refresh();
-            }
-            "Ctrl+H" => {
-                let panel = self.active_panel_mut();
-                panel.show_hidden = !panel.show_hidden;
-                panel.refresh();
-            }
-            "Ctrl+F3" => self.active_panel_mut().set_sort(SortBy::Name),
-            "Ctrl+F4" => self.active_panel_mut().set_sort(SortBy::Extension),
-            "Ctrl+F5" => self.active_panel_mut().set_sort(SortBy::Modified),
-            "Ctrl+F6" => self.active_panel_mut().set_sort(SortBy::Size),
-            "Ctrl+A" => self.active_panel_mut().select_all(),
-            _ => {}
-        }
-    }
-
-    fn handle_choose_sort_dialog(&mut self, ev: &Input) {
-        if let Input::Keyboard(key) = ev {
-            let key = *key;
-            if key == vk::ESCAPE {
-                self.dialog = Dialog::None;
-                return;
-            }
-            if key == vk::RETURN {
-                if let Dialog::ChooseSort { cursor } = &self.dialog {
-                    let sort_by = SORT_OPTIONS[*cursor].1;
-                    self.dialog = Dialog::None;
-                    self.active_panel_mut().set_sort(sort_by);
-                }
-                return;
-            }
-        }
-
-        if let Input::Mouse(mouse) = ev
-            && mouse.state == InputMouseState::Left
-        {
-            let Dialog::ChooseSort { cursor } = &mut self.dialog else {
-                return;
-            };
-            let is_double = detect_double_click(&mut self.last_click, mouse.position);
-            if let Some(idx) =
-                list_dialog_hit_index(mouse.position.y, SORT_OPTIONS.len(), self.term_size.height)
-            {
-                *cursor = idx;
-                if is_double {
-                    let sort_by = SORT_OPTIONS[idx].1;
-                    self.dialog = Dialog::None;
-                    self.active_panel_mut().set_sort(sort_by);
-                }
-            } else {
-                self.dialog = Dialog::None;
-            }
-            return;
-        }
-
-        let Dialog::ChooseSort { cursor } = &mut self.dialog else {
-            return;
-        };
-        if let Input::Keyboard(key) = ev {
-            list_nav_key(*key, cursor, SORT_OPTIONS.len());
+            self.execute_action(*action);
         }
     }
 }
@@ -1450,7 +1356,7 @@ fn list_nav_key(key: InputKey, cursor: &mut usize, len: usize) {
     }
 }
 
-fn list_dialog_hit_index(
+pub fn list_dialog_hit_index(
     mouse_y: CoordType,
     entry_count: usize,
     term_height: CoordType,
@@ -1469,8 +1375,13 @@ fn list_dialog_hit_index(
 /// - inner height = content_h + 4 (top_spacer + content + bot_spacer + slack)
 /// - outer height = inner + 2 (border)
 /// - entries start at outer_top + 2 (border + top_spacer)
-fn help_dialog_hit_index(mouse_y: CoordType, scroll: usize, term_size: Size) -> Option<usize> {
-    let total = HELP_TEXT.len() as CoordType;
+fn help_dialog_hit_index(
+    mouse_y: CoordType,
+    scroll: usize,
+    help_len: usize,
+    term_size: Size,
+) -> Option<usize> {
+    let total = help_len as CoordType;
     let max_visible = (term_size.height - 8).max(4);
     let content_h = total.min(max_visible);
     let inner_h = content_h + 4; // matches draw_help_dialog
@@ -1480,7 +1391,7 @@ fn help_dialog_hit_index(mouse_y: CoordType, scroll: usize, term_size: Size) -> 
     if mouse_y >= entry_start && mouse_y < entry_start + content_h {
         let row = (mouse_y - entry_start) as usize;
         let idx = scroll + row;
-        if idx < HELP_TEXT.len() {
+        if idx < help_len {
             return Some(idx);
         }
     }

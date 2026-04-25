@@ -10,7 +10,7 @@ use std::time::SystemTime;
 
 use crate::platform;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SortBy {
     Name,
     Extension,
