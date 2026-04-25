@@ -521,6 +521,44 @@ pub fn remove_symlink(path: &Path) -> std::io::Result<()> {
 }
 
 /// Recreate a symlink at `dst` pointing to the same target as `src`.
+/// Copy text to the system clipboard via OSC 52 escape sequence.
+/// This works in most modern terminals (iTerm2, kitty, alacritty, Windows Terminal, etc.).
+pub fn copy_to_clipboard(text: &str) {
+    use ruf4_tui::sys;
+    use std::io::Write;
+
+    let mut buf = Vec::new();
+    let encoded = base64_encode(text.as_bytes());
+    write!(buf, "\x1b]52;c;{encoded}\x1b\\").ok();
+    if let Ok(s) = std::str::from_utf8(&buf) {
+        sys::write_stdout(s);
+    }
+}
+
+fn base64_encode(data: &[u8]) -> String {
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut result = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        result.push(CHARS[((triple >> 18) & 0x3F) as usize] as char);
+        result.push(CHARS[((triple >> 12) & 0x3F) as usize] as char);
+        if chunk.len() > 1 {
+            result.push(CHARS[((triple >> 6) & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+        if chunk.len() > 2 {
+            result.push(CHARS[(triple & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+    }
+    result
+}
+
 pub fn copy_symlink(src: &Path, dst: &Path) -> std::io::Result<()> {
     let link_target = fs::read_link(src)?;
     #[cfg(unix)]

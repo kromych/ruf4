@@ -138,6 +138,7 @@ pub struct State {
     pub bindings: Vec<Binding>,
     pub help_text: Vec<(String, &'static str, Action)>,
     pub theme: Theme,
+    pub last_output: Option<(String, String)>, // (command, output)
     last_click: Option<(Instant, Point)>,
 }
 
@@ -181,6 +182,7 @@ impl State {
             bindings,
             help_text,
             theme,
+            last_output: None,
             last_click: None,
         };
 
@@ -229,6 +231,7 @@ impl State {
             bindings,
             help_text,
             theme,
+            last_output: None,
             last_click: None,
         }
     }
@@ -369,6 +372,15 @@ impl State {
             Action::ChangeRoot => self.open_choose_root(),
             Action::DirHistory => self.open_dir_history(),
             Action::CmdHistory => self.open_cmd_history(),
+            Action::LastOutput => {
+                if let Some((ref cmd, ref out)) = self.last_output {
+                    self.dialog = Dialog::ShellOutput {
+                        command: cmd.clone(),
+                        output: out.clone(),
+                        scroll: 0,
+                    };
+                }
+            }
             Action::FocusMenu => self.want_menu_focus = true,
             Action::Quit => {
                 self.dialog = Dialog::ConfirmQuit {
@@ -1132,12 +1144,16 @@ impl State {
     }
 
     fn handle_scrollable_dialog(&mut self, ev: &Input) {
-        let Dialog::ShellOutput { scroll, .. } = &mut self.dialog else {
+        let Dialog::ShellOutput { scroll, output, .. } = &mut self.dialog else {
             return;
         };
         match ev {
             Input::Keyboard(key) => {
                 let key = *key;
+                if key == (kbmod::CTRL | vk::C) {
+                    platform::copy_to_clipboard(output);
+                    return;
+                }
                 if key == vk::ESCAPE || key == vk::RETURN || key == vk::SPACE {
                     *scroll = usize::MAX; // signal dismiss (finalize_dialog cleans up)
                 } else if key == vk::UP {
@@ -1315,9 +1331,14 @@ impl State {
 impl State {
     /// Call after handle_dialog_input to finalize deferred state changes.
     pub fn finalize_dialog(&mut self) {
-        if let Dialog::ShellOutput { scroll, .. } = &self.dialog
+        if let Dialog::ShellOutput {
+            scroll,
+            command,
+            output,
+        } = &self.dialog
             && *scroll == usize::MAX
         {
+            self.last_output = Some((command.clone(), output.clone()));
             self.dialog = Dialog::None;
         }
     }
