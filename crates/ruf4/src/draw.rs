@@ -382,7 +382,11 @@ fn draw_single_panel(
 
         if is_cursor && is_active {
             ctx.attr_background_rgba(ctx.indexed(theme.cursor_bg));
-            ctx.attr_foreground_rgba(ctx.indexed(theme.cursor_fg));
+            if entry.selected {
+                ctx.attr_foreground_rgba(ctx.indexed(theme.file_selected));
+            } else {
+                ctx.attr_foreground_rgba(ctx.indexed(theme.cursor_fg));
+            }
         } else if entry.selected {
             ctx.attr_foreground_rgba(ctx.indexed(theme.file_selected));
         } else if entry.is_dir {

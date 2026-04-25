@@ -208,10 +208,10 @@ fn test_insert_toggles_selection() {
 }
 
 #[test]
-fn test_shift_space_toggles_selection() {
+fn test_ctrl_space_toggles_selection() {
     let mut s = test_state();
     s.active_panel_mut().cursor = 1;
-    s.handle_global_input(&Input::Keyboard(kbmod::SHIFT | vk::SPACE));
+    s.handle_global_input(&Input::Keyboard(kbmod::CTRL | vk::SPACE));
     assert!(s.active_panel().entries[1].selected);
 }
 

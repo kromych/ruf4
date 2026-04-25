@@ -138,35 +138,49 @@ impl Settings {
         // entry and added alongside the defaults to avoid losing existing bindings.
         let mut bindings = action::default_bindings();
         for (key, value) in &map {
-            if let Some(action_name) = key.strip_prefix("bind.")
-                && let Some(action) = action::parse_action(action_name)
-            {
-                if value.contains(',') {
-                    // New format: full replacement.
-                    let parsed_keys: Vec<_> = value
-                        .split(',')
-                        .filter_map(|s| action::parse_key_name(s.trim()))
-                        .collect();
-                    if !parsed_keys.is_empty() {
-                        bindings.retain(|b| b.action != action);
-                        for input_key in parsed_keys {
-                            bindings.push(Binding {
-                                key: input_key,
-                                action,
-                            });
-                        }
-                    }
-                } else if let Some(input_key) = action::parse_key_name(value) {
-                    // Legacy format: add if not already present.
-                    if !bindings
-                        .iter()
-                        .any(|b| b.action == action && b.key == input_key)
-                    {
+            let Some(action_name) = key.strip_prefix("bind.") else {
+                continue;
+            };
+            let Some(action) = action::parse_action(action_name) else {
+                continue;
+            };
+
+            if value.contains(',') {
+                // New format: full replacement.
+                let parsed_keys: Vec<_> = value
+                    .split(',')
+                    .filter_map(|s| action::parse_key_name(s.trim()))
+                    .collect();
+                if !parsed_keys.is_empty() {
+                    bindings.retain(|b| b.action != action);
+                    for input_key in parsed_keys {
                         bindings.push(Binding {
                             key: input_key,
                             action,
                         });
                     }
+                }
+            } else if let Some(input_key) = action::parse_key_name(value) {
+                // Legacy format: add if not already present.
+                if !bindings
+                    .iter()
+                    .any(|b| b.action == action && b.key == input_key)
+                {
+                    bindings.push(Binding {
+                        key: input_key,
+                        action,
+                    });
+                }
+            } else if let Some(input_key) = action::parse_key_name(value) {
+                // Legacy format: add if not already present.
+                if !bindings
+                    .iter()
+                    .any(|b| b.action == action && b.key == input_key)
+                {
+                    bindings.push(Binding {
+                        key: input_key,
+                        action,
+                    });
                 }
             }
         }
@@ -268,6 +282,7 @@ quick_view={}\n",
         for &field in THEME_FIELDS {
             if let (Some(current), Some(default)) =
                 (self.theme.get_field(field), default_theme.get_field(field))
+                && theme::color_str(current) != theme::color_str(default)
                 && theme::color_str(current) != theme::color_str(default)
             {
                 content.push_str(&format!("theme.{field}={}\n", theme::color_str(current),));
