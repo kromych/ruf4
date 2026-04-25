@@ -140,7 +140,7 @@ fn draw_menubar(ctx: &mut Context, state: &mut State) -> bool {
                 state.execute_action(Action::ToggleQuickView);
             }
 
-            // Sort modes (FAR-style: Ctrl+F3..F6)
+            // Sort modes
             let sort = state.active_panel().sort_by;
             if ctx.menubar_menu_checkbox(
                 "Sort by name",

@@ -89,8 +89,8 @@ pub struct Binding {
     pub action: Action,
 }
 
-/// The default FAR-style binding table. The first matching key wins in
-/// `lookup`. Modifier combinations are encoded into the key via `kbmod::*`.
+/// The first matching key wins in `lookup`. Modifier
+/// combinations are encoded into the key via `kbmod::*`.
 pub fn default_bindings() -> Vec<Binding> {
     let mut bindings = vec![
         // Function keys (on macOS these need Fn; Ctrl alternatives below).
