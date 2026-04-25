@@ -32,6 +32,7 @@ pub struct Theme {
     pub file_dir: IndexedColor,
     pub file_executable: IndexedColor,
     pub file_readonly: IndexedColor,
+    pub file_hidden: IndexedColor,
     pub file_normal: IndexedColor,
 
     // ── Preview panel ──────────────────────────────────────────────────
@@ -161,6 +162,7 @@ pub const THEME_FIELDS: &[&str] = &[
     "file_dir",
     "file_executable",
     "file_readonly",
+    "file_hidden",
     "file_normal",
     "preview_border",
     "preview_text",
@@ -230,6 +232,7 @@ impl Theme {
             "file_dir" => self.file_dir,
             "file_executable" => self.file_executable,
             "file_readonly" => self.file_readonly,
+            "file_hidden" => self.file_hidden,
             "file_normal" => self.file_normal,
             "preview_border" => self.preview_border,
             "preview_text" => self.preview_text,
@@ -300,6 +303,7 @@ impl Theme {
             "file_dir" => self.file_dir = color,
             "file_executable" => self.file_executable = color,
             "file_readonly" => self.file_readonly = color,
+            "file_hidden" => self.file_hidden = color,
             "file_normal" => self.file_normal = color,
             "preview_border" => self.preview_border = color,
             "preview_text" => self.preview_text = color,
@@ -375,7 +379,8 @@ impl Theme {
             file_selected: IndexedColor::BrightYellow,
             file_dir: IndexedColor::BrightWhite,
             file_executable: IndexedColor::BrightGreen,
-            file_readonly: IndexedColor::BrightBlack,
+            file_readonly: IndexedColor::Red,
+            file_hidden: IndexedColor::BrightBlack,
             file_normal: IndexedColor::White,
 
             // Preview

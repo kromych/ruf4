@@ -389,6 +389,8 @@ fn draw_single_panel(
             }
         } else if entry.selected {
             ctx.attr_foreground_rgba(ctx.indexed(theme.file_selected));
+        } else if entry.is_hidden {
+            ctx.attr_foreground_rgba(ctx.indexed(theme.file_hidden));
         } else if entry.is_dir {
             ctx.attr_foreground_rgba(ctx.indexed(theme.file_dir));
         } else if entry.is_executable {
