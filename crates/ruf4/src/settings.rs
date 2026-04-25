@@ -139,44 +139,46 @@ impl Settings {
         let mut bindings = action::default_bindings();
         for (key, value) in &map {
             if let Some(action_name) = key.strip_prefix("bind.")
-                && let Some(action) = action::parse_action(action_name) {
-                    if value.contains(',') {
-                        // New format: full replacement.
-                        let parsed_keys: Vec<_> = value
-                            .split(',')
-                            .filter_map(|s| action::parse_key_name(s.trim()))
-                            .collect();
-                        if !parsed_keys.is_empty() {
-                            bindings.retain(|b| b.action != action);
-                            for input_key in parsed_keys {
-                                bindings.push(Binding {
-                                    key: input_key,
-                                    action,
-                                });
-                            }
-                        }
-                    } else if let Some(input_key) = action::parse_key_name(value) {
-                        // Legacy format: add if not already present.
-                        if !bindings
-                            .iter()
-                            .any(|b| b.action == action && b.key == input_key)
-                        {
+                && let Some(action) = action::parse_action(action_name)
+            {
+                if value.contains(',') {
+                    // New format: full replacement.
+                    let parsed_keys: Vec<_> = value
+                        .split(',')
+                        .filter_map(|s| action::parse_key_name(s.trim()))
+                        .collect();
+                    if !parsed_keys.is_empty() {
+                        bindings.retain(|b| b.action != action);
+                        for input_key in parsed_keys {
                             bindings.push(Binding {
                                 key: input_key,
                                 action,
                             });
                         }
                     }
+                } else if let Some(input_key) = action::parse_key_name(value) {
+                    // Legacy format: add if not already present.
+                    if !bindings
+                        .iter()
+                        .any(|b| b.action == action && b.key == input_key)
+                    {
+                        bindings.push(Binding {
+                            key: input_key,
+                            action,
+                        });
+                    }
                 }
+            }
         }
 
         // Theme: start from defaults, override with saved colors.
         let mut theme_val = Theme::far();
         for (key, value) in &map {
             if let Some(field_name) = key.strip_prefix("theme.")
-                && let Some(color) = theme::parse_color(value) {
-                    theme_val.set_field(field_name, color);
-                }
+                && let Some(color) = theme::parse_color(value)
+            {
+                theme_val.set_field(field_name, color);
+            }
         }
 
         Some(Self {
@@ -266,9 +268,10 @@ quick_view={}\n",
         for &field in THEME_FIELDS {
             if let (Some(current), Some(default)) =
                 (self.theme.get_field(field), default_theme.get_field(field))
-                && theme::color_str(current) != theme::color_str(default) {
-                    content.push_str(&format!("theme.{field}={}\n", theme::color_str(current),));
-                }
+                && theme::color_str(current) != theme::color_str(default)
+            {
+                content.push_str(&format!("theme.{field}={}\n", theme::color_str(current),));
+            }
         }
 
         fs::write(&path, content).map_err(|e| format!("cannot write settings: {e}"))

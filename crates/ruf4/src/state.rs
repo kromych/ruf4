@@ -811,9 +811,10 @@ impl State {
             vk::F10,
         ];
         if let Some(&fk) = fkeys.get(slot as usize)
-            && let Some(act) = action::lookup(&self.bindings, fk) {
-                self.execute_action(act);
-            }
+            && let Some(act) = action::lookup(&self.bindings, fk)
+        {
+            self.execute_action(act);
+        }
     }
 
     // ── Command line ────────────────────────────────────────────────────
