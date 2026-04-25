@@ -201,10 +201,9 @@ fn draw_menubar(ctx: &mut Context, state: &mut State) -> bool {
         // When the menu is NOT active, handle_keyboard() already dispatched,
         // so we only consume (to prevent the TUI from reprocessing the key).
         for binding in &bindings {
-            if !binding.action.is_immediate() && ctx.consume_shortcut(binding.key) {
-                if contains_focus {
-                    state.execute_action(binding.action);
-                }
+            if !binding.action.is_immediate() && ctx.consume_shortcut(binding.key) && contains_focus
+            {
+                state.execute_action(binding.action);
             }
         }
 
@@ -1311,7 +1310,6 @@ fn draw_list_dialog(
         id,
         bg: theme.dialog_info_bg,
         preferred_width: (max_len as CoordType + 8).max(min_width),
-        ..DIALOG_BLUE_50
     };
     let h = entries.len() as CoordType + 4;
     let w = dialog_begin(ctx, theme, &spec, caption, h, size);
@@ -1348,7 +1346,6 @@ fn draw_confirm_quit_dialog(
         id: "quit-dialog",
         bg: theme.dialog_error_bg,
         preferred_width: 44,
-        ..DIALOG_RED_44
     };
     dialog_begin(
         ctx,

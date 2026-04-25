@@ -138,8 +138,8 @@ impl Settings {
         // entry and added alongside the defaults to avoid losing existing bindings.
         let mut bindings = action::default_bindings();
         for (key, value) in &map {
-            if let Some(action_name) = key.strip_prefix("bind.") {
-                if let Some(action) = action::parse_action(action_name) {
+            if let Some(action_name) = key.strip_prefix("bind.")
+                && let Some(action) = action::parse_action(action_name) {
                     if value.contains(',') {
                         // New format: full replacement.
                         let parsed_keys: Vec<_> = value
@@ -168,17 +168,15 @@ impl Settings {
                         }
                     }
                 }
-            }
         }
 
         // Theme: start from defaults, override with saved colors.
         let mut theme_val = Theme::far();
         for (key, value) in &map {
-            if let Some(field_name) = key.strip_prefix("theme.") {
-                if let Some(color) = theme::parse_color(value) {
+            if let Some(field_name) = key.strip_prefix("theme.")
+                && let Some(color) = theme::parse_color(value) {
                     theme_val.set_field(field_name, color);
                 }
-            }
         }
 
         Some(Self {
@@ -268,11 +266,9 @@ quick_view={}\n",
         for &field in THEME_FIELDS {
             if let (Some(current), Some(default)) =
                 (self.theme.get_field(field), default_theme.get_field(field))
-            {
-                if theme::color_str(current) != theme::color_str(default) {
+                && theme::color_str(current) != theme::color_str(default) {
                     content.push_str(&format!("theme.{field}={}\n", theme::color_str(current),));
                 }
-            }
         }
 
         fs::write(&path, content).map_err(|e| format!("cannot write settings: {e}"))
