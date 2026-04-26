@@ -1,6 +1,6 @@
 [package]
 name = "ruf4"
-version = "0.0.1"
+version = "0.0.3"
 description = "A dual-panel file commander"
 
 edition.workspace = true
