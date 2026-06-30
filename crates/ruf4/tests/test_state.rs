@@ -1,8 +1,10 @@
 use std::path::PathBuf;
 
 use ruf4::panel::{Panel, make_entry};
+use ruf4::preview::Preview;
 use ruf4::state::{ActivePanel, Dialog, State};
-use ruf4_tui::input::{Input, kbmod, vk};
+use ruf4_tui::helpers::{Point, Size};
+use ruf4_tui::input::{Input, InputMouse, InputMouseState, kbmod, vk};
 
 fn test_panel(names: &[(&str, bool)]) -> Panel {
     let mut entries = vec![make_entry("..", true, 0)];
@@ -334,4 +336,83 @@ fn test_dialog_blocks_navigation() {
     s.handle_global_input(&Input::Keyboard(vk::DOWN));
     // DOWN should be consumed by dialog handler, not navigation
     assert_eq!(s.active_panel().cursor, cursor_before);
+}
+
+// --- Quick view scrolling ---
+
+fn preview_with_lines(n: usize) -> Preview {
+    let mut p = Preview::empty();
+    p.lines = (0..n).map(|i| format!("line {i}")).collect();
+    p
+}
+
+fn scroll_event(x: isize, dy: isize) -> Input<'static> {
+    Input::Mouse(InputMouse {
+        state: InputMouseState::Scroll,
+        modifiers: kbmod::NONE,
+        position: Point { x, y: 5 },
+        scroll: Point { x: 0, y: dy },
+        drag: false,
+    })
+}
+
+#[test]
+fn test_quick_view_wheel_scrolls_preview() {
+    let mut s = test_state(); // active == Left, so the preview is on the right half
+    s.quick_view = true;
+    s.term_size = Size {
+        width: 80,
+        height: 24,
+    };
+    s.preview = preview_with_lines(100);
+
+    // Wheel down over the right half (x >= 40) scrolls the preview down.
+    s.handle_global_input(&scroll_event(60, 1));
+    assert_eq!(s.preview_scroll, 3);
+    s.handle_global_input(&scroll_event(60, 1));
+    assert_eq!(s.preview_scroll, 6);
+    // Wheel up scrolls back, saturating at 0.
+    s.handle_global_input(&scroll_event(60, -1));
+    assert_eq!(s.preview_scroll, 3);
+    s.handle_global_input(&scroll_event(60, -1));
+    s.handle_global_input(&scroll_event(60, -1));
+    assert_eq!(s.preview_scroll, 0);
+}
+
+#[test]
+fn test_quick_view_wheel_over_file_list_moves_cursor_not_preview() {
+    let mut s = test_state(); // active == Left; the active file list is the left half
+    s.quick_view = true;
+    s.term_size = Size {
+        width: 80,
+        height: 24,
+    };
+    s.preview = preview_with_lines(100);
+    s.preview_scroll = 5;
+
+    let before = s.active_panel().cursor;
+    s.handle_global_input(&scroll_event(10, 1)); // left half = active file list
+    assert_eq!(
+        s.preview_scroll, 5,
+        "preview must not move when scrolling files"
+    );
+    assert!(
+        s.active_panel().cursor >= before,
+        "file cursor should advance"
+    );
+}
+
+#[test]
+fn test_preview_scroll_resets_on_file_change() {
+    let mut s = test_state();
+    s.quick_view = true;
+    s.preview_scroll = 5;
+    s.preview_path = Some(PathBuf::from("/test/previous"));
+    s.active_panel_mut().cursor = 1; // selects a real different entry
+
+    s.update_preview();
+    assert_eq!(
+        s.preview_scroll, 0,
+        "a new previewed file starts at the top"
+    );
 }

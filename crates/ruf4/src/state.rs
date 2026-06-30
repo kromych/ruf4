@@ -592,6 +592,7 @@ impl State {
             return;
         }
         self.preview_path = current.clone();
+        self.preview_scroll = 0; // A new file starts at the top.
         self.preview = match current {
             Some(path) => preview::generate(&path),
             None => Preview::empty(),
@@ -780,16 +781,32 @@ impl State {
             self.handle_mouse_click(mouse.position);
         } else if mouse.state == InputMouseState::Scroll {
             let panel_width = self.term_size.width / 2;
-            let panel = if mouse.position.x < panel_width {
-                &mut self.left
+            let on_left = mouse.position.x < panel_width;
+            // The quick view occupies the inactive side; scroll it there.
+            if self.quick_view && on_left == (self.active == ActivePanel::Right) {
+                self.scroll_preview(mouse.scroll.y);
             } else {
-                &mut self.right
-            };
-            if mouse.scroll.y < 0 {
-                panel.cursor_up(MOUSE_SCROLL);
-            } else if mouse.scroll.y > 0 {
-                panel.cursor_down(MOUSE_SCROLL);
+                let panel = if on_left {
+                    &mut self.left
+                } else {
+                    &mut self.right
+                };
+                if mouse.scroll.y < 0 {
+                    panel.cursor_up(MOUSE_SCROLL);
+                } else if mouse.scroll.y > 0 {
+                    panel.cursor_down(MOUSE_SCROLL);
+                }
             }
+        }
+    }
+
+    /// Scroll the quick view by a wheel delta. The result is clamped to the
+    /// content during the next draw (`apply_draw_result`).
+    fn scroll_preview(&mut self, delta: CoordType) {
+        if delta < 0 {
+            self.preview_scroll = self.preview_scroll.saturating_sub(MOUSE_SCROLL);
+        } else if delta > 0 {
+            self.preview_scroll = self.preview_scroll.saturating_add(MOUSE_SCROLL);
         }
     }
 

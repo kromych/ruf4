@@ -170,7 +170,7 @@ Most confirmation dialogs respond to:
 - Click a panel to make it active
 - Click a file entry to select it
 - Double-click to enter a directory or open a file
-- Scroll wheel to navigate
+- Scroll wheel to navigate; over the quick view panel it scrolls the preview
 - Click the function key bar at the bottom for quick access
 
 ### Clicking around
