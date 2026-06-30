@@ -82,6 +82,73 @@ impl FileEntry {
     }
 }
 
+/// Read a directory into a list of [`FileEntry`], prepending `..` when a parent
+/// exists. Hidden entries are dropped unless `show_hidden`. The result is
+/// unsorted. This performs only filesystem and `platform` calls, so it is safe to
+/// run on a worker thread (it touches no shared application state).
+pub fn scan_dir(path: &Path, show_hidden: bool) -> Vec<FileEntry> {
+    let mut entries = Vec::new();
+
+    if path.parent().is_some() {
+        entries.push(FileEntry {
+            name: "..".to_string(),
+            is_dir: true,
+            is_symlink: false,
+            is_hardlink: false,
+            is_executable: false,
+            is_readonly: false,
+            is_hidden: false,
+            size: 0,
+            modified: None,
+            selected: false,
+        });
+    }
+
+    if let Ok(iter) = fs::read_dir(path) {
+        for entry in iter.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+
+            let is_symlink = entry.file_type().map(|t| t.is_symlink()).unwrap_or(false);
+            let metadata = if is_symlink {
+                fs::metadata(entry.path()).ok()
+            } else {
+                entry.metadata().ok()
+            };
+
+            let is_hidden = platform::is_hidden(&name, metadata.as_ref());
+            if !show_hidden && is_hidden {
+                continue;
+            }
+
+            let is_dir = metadata.as_ref().map(|m| m.is_dir()).unwrap_or(false);
+            let size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
+            let modified = metadata.as_ref().and_then(|m| m.modified().ok());
+            let is_readonly = metadata
+                .as_ref()
+                .map(|m| m.permissions().readonly())
+                .unwrap_or(false);
+
+            let (is_hardlink, is_executable) =
+                platform::detect_hardlink_executable(metadata.as_ref(), is_dir, is_symlink, &name);
+
+            entries.push(FileEntry {
+                name,
+                is_dir,
+                is_symlink,
+                is_hardlink,
+                is_executable,
+                is_readonly,
+                is_hidden,
+                size,
+                modified,
+                selected: false,
+            });
+        }
+    }
+
+    entries
+}
+
 pub struct Panel {
     pub path: PathBuf,
     pub entries: Vec<FileEntry>,
@@ -124,70 +191,7 @@ impl Panel {
 
     pub fn refresh(&mut self) {
         self.last_refresh = platform::format_current_time();
-        self.entries.clear();
-
-        // ".." entry to go up.
-        if self.path.parent().is_some() {
-            self.entries.push(FileEntry {
-                name: "..".to_string(),
-                is_dir: true,
-                is_symlink: false,
-                is_hardlink: false,
-                is_executable: false,
-                is_readonly: false,
-                is_hidden: false,
-                size: 0,
-                modified: None,
-                selected: false,
-            });
-        }
-
-        if let Ok(iter) = fs::read_dir(&self.path) {
-            for entry in iter.flatten() {
-                let name = entry.file_name().to_string_lossy().into_owned();
-
-                let is_symlink = entry.file_type().map(|t| t.is_symlink()).unwrap_or(false);
-                let metadata = if is_symlink {
-                    fs::metadata(entry.path()).ok()
-                } else {
-                    entry.metadata().ok()
-                };
-
-                let is_hidden = platform::is_hidden(&name, metadata.as_ref());
-                if !self.show_hidden && is_hidden {
-                    continue;
-                }
-
-                let is_dir = metadata.as_ref().map(|m| m.is_dir()).unwrap_or(false);
-                let size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
-                let modified = metadata.as_ref().and_then(|m| m.modified().ok());
-                let is_readonly = metadata
-                    .as_ref()
-                    .map(|m| m.permissions().readonly())
-                    .unwrap_or(false);
-
-                let (is_hardlink, is_executable) = platform::detect_hardlink_executable(
-                    metadata.as_ref(),
-                    is_dir,
-                    is_symlink,
-                    &name,
-                );
-
-                self.entries.push(FileEntry {
-                    name,
-                    is_dir,
-                    is_symlink,
-                    is_hardlink,
-                    is_executable,
-                    is_readonly,
-                    is_hidden,
-                    size,
-                    modified,
-                    selected: false,
-                });
-            }
-        }
-
+        self.entries = scan_dir(&self.path, self.show_hidden);
         self.sort();
         self.cursor = self.cursor.min(self.entries.len().saturating_sub(1));
     }
