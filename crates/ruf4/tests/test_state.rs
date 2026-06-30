@@ -196,6 +196,54 @@ fn test_command_line_backspace_clears() {
     assert!(!s.command_line_active); // auto-deactivate when empty
 }
 
+#[test]
+fn test_command_line_insert_at_cursor() {
+    let mut s = test_state();
+    s.command_line_active = true;
+    s.command_line = "ac".to_string();
+    s.cmd_cursor = 1;
+    s.handle_global_input(&Input::Text("b"));
+    assert_eq!(s.command_line, "abc");
+    assert_eq!(s.cmd_cursor, 2);
+}
+
+#[test]
+fn test_command_line_delete_and_cursor_moves() {
+    let mut s = test_state();
+    s.command_line_active = true;
+    s.command_line = "abc".to_string();
+    // HOME then DELETE removes the first char (forward delete at cursor 0).
+    s.cmd_cursor = 3;
+    s.handle_global_input(&Input::Keyboard(vk::HOME));
+    assert_eq!(s.cmd_cursor, 0);
+    s.handle_global_input(&Input::Keyboard(vk::DELETE));
+    assert_eq!(s.command_line, "bc");
+    // RIGHT then BACK removes the char before the cursor.
+    s.handle_global_input(&Input::Keyboard(vk::RIGHT));
+    assert_eq!(s.cmd_cursor, 1);
+    s.handle_global_input(&Input::Keyboard(vk::BACK));
+    assert_eq!(s.command_line, "c");
+    assert_eq!(s.cmd_cursor, 0);
+    // END moves to the end.
+    s.handle_global_input(&Input::Keyboard(vk::END));
+    assert_eq!(s.cmd_cursor, 1);
+}
+
+#[test]
+fn test_mkdir_dialog_text_editing() {
+    let mut s = test_state();
+    s.handle_global_input(&Input::Keyboard(vk::F7)); // open MkDir
+    assert!(matches!(s.dialog, Dialog::MkDir { .. }));
+    s.handle_global_input(&Input::Text("ac"));
+    s.handle_global_input(&Input::Keyboard(vk::LEFT));
+    s.handle_global_input(&Input::Text("b"));
+    if let Dialog::MkDir { name } = &s.dialog {
+        assert_eq!(name, "abc");
+    } else {
+        panic!("expected MkDir dialog");
+    }
+}
+
 // --- Insert / Shift+Space selection ---
 
 #[test]

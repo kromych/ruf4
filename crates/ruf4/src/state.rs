@@ -937,13 +937,17 @@ impl State {
 
     // ── Command line ────────────────────────────────────────────────────
 
+    fn command_field(&mut self) -> TextField<'_> {
+        TextField {
+            text: &mut self.command_line,
+            cursor: &mut self.cmd_cursor,
+        }
+    }
+
     fn handle_command_line_input(&mut self, ev: &Input) -> bool {
         match ev {
             Input::Text(text) => {
-                let cur = self.cmd_cursor;
-                let byte_pos = char_to_byte(&self.command_line, cur);
-                self.command_line.insert_str(byte_pos, text);
-                self.cmd_cursor = cur + text.chars().count();
+                self.command_field().insert(text);
                 true
             }
             Input::Keyboard(key) => {
@@ -959,42 +963,23 @@ impl State {
                     self.command_line_active = false;
                     self.cmd_cursor = 0;
                 } else if key == vk::BACK && self.cmd_cursor > 0 {
-                    let cur = self.cmd_cursor;
-                    let byte_pos = char_to_byte(&self.command_line, cur - 1);
-                    let next = self.command_line[byte_pos..]
-                        .char_indices()
-                        .nth(1)
-                        .map_or(self.command_line.len(), |(i, _)| byte_pos + i);
-                    self.command_line.drain(byte_pos..next);
-                    self.cmd_cursor = cur - 1;
+                    self.command_field().backspace();
                     if self.command_line.is_empty() {
                         self.command_line_active = false;
                     }
                 } else if key == vk::DELETE {
-                    let cur = self.cmd_cursor;
-                    let len = self.command_line.chars().count();
-                    if cur < len {
-                        let byte_pos = char_to_byte(&self.command_line, cur);
-                        let next = self.command_line[byte_pos..]
-                            .char_indices()
-                            .nth(1)
-                            .map_or(self.command_line.len(), |(i, _)| byte_pos + i);
-                        self.command_line.drain(byte_pos..next);
-                        if self.command_line.is_empty() {
-                            self.command_line_active = false;
-                        }
+                    self.command_field().delete();
+                    if self.command_line.is_empty() {
+                        self.command_line_active = false;
                     }
                 } else if key == vk::LEFT {
-                    self.cmd_cursor = self.cmd_cursor.saturating_sub(1);
+                    self.command_field().left();
                 } else if key == vk::RIGHT {
-                    let len = self.command_line.chars().count();
-                    if self.cmd_cursor < len {
-                        self.cmd_cursor += 1;
-                    }
+                    self.command_field().right();
                 } else if key == vk::HOME {
-                    self.cmd_cursor = 0;
+                    self.command_field().home();
                 } else if key == vk::END {
-                    self.cmd_cursor = self.command_line.chars().count();
+                    self.command_field().end();
                 } else {
                     // Tab, Up, Down, function keys -- let them fall through.
                     return false;
@@ -1061,12 +1046,9 @@ impl State {
     fn handle_text_input_dialog(&mut self, ev: &Input) {
         match ev {
             Input::Text(text) => {
-                let cur = self.input_cursor;
-                if let Some(field) = self.dialog_text_field() {
-                    let byte_pos = char_to_byte(field, cur);
-                    field.insert_str(byte_pos, text);
+                if let Some(mut field) = self.dialog_field_mut() {
+                    field.insert(text);
                 }
-                self.input_cursor = cur + text.chars().count();
             }
             Input::Keyboard(key) => {
                 let key = *key;
@@ -1074,58 +1056,37 @@ impl State {
                     self.dialog = Dialog::None;
                 } else if key == vk::RETURN {
                     self.commit_text_dialog();
-                } else if key == vk::BACK && self.input_cursor > 0 {
-                    let cur = self.input_cursor;
-                    if let Some(field) = self.dialog_text_field() {
-                        let byte_pos = char_to_byte(field, cur - 1);
-                        let next = field[byte_pos..]
-                            .char_indices()
-                            .nth(1)
-                            .map_or(field.len(), |(i, _)| byte_pos + i);
-                        field.drain(byte_pos..next);
+                } else if let Some(mut field) = self.dialog_field_mut() {
+                    if key == vk::BACK {
+                        field.backspace();
+                    } else if key == vk::DELETE {
+                        field.delete();
+                    } else if key == vk::LEFT {
+                        field.left();
+                    } else if key == vk::RIGHT {
+                        field.right();
+                    } else if key == vk::HOME {
+                        field.home();
+                    } else if key == vk::END {
+                        field.end();
                     }
-                    self.input_cursor = cur - 1;
-                } else if key == vk::DELETE {
-                    let cur = self.input_cursor;
-                    let len = self.dialog_text_field().map_or(0, |f| f.chars().count());
-                    if cur < len
-                        && let Some(field) = self.dialog_text_field()
-                    {
-                        let byte_pos = char_to_byte(field, cur);
-                        let next = field[byte_pos..]
-                            .char_indices()
-                            .nth(1)
-                            .map_or(field.len(), |(i, _)| byte_pos + i);
-                        field.drain(byte_pos..next);
-                    }
-                } else if key == vk::LEFT {
-                    self.input_cursor = self.input_cursor.saturating_sub(1);
-                } else if key == vk::RIGHT {
-                    let cur = self.input_cursor;
-                    let len = self.dialog_text_field().map_or(0, |f| f.chars().count());
-                    if cur < len {
-                        self.input_cursor = cur + 1;
-                    }
-                } else if key == vk::HOME {
-                    self.input_cursor = 0;
-                } else if key == vk::END {
-                    let len = self.dialog_text_field().map_or(0, |f| f.chars().count());
-                    self.input_cursor = len;
                 }
             }
             _ => {}
         }
     }
 
-    fn dialog_text_field(&mut self) -> Option<&mut String> {
-        match &mut self.dialog {
-            Dialog::MkDir { name } => Some(name),
-            Dialog::Rename { name } => Some(name),
-            Dialog::Copy { dest, .. } => Some(dest),
-            Dialog::Move { dest, .. } => Some(dest),
-            Dialog::SelectGroup { pattern, .. } => Some(pattern),
-            _ => None,
-        }
+    /// The active dialog's editable text field paired with the shared input
+    /// cursor, as a [`TextField`]. `None` for dialogs without a text field.
+    fn dialog_field_mut(&mut self) -> Option<TextField<'_>> {
+        let cursor = &mut self.input_cursor;
+        let text = match &mut self.dialog {
+            Dialog::MkDir { name } | Dialog::Rename { name } => name,
+            Dialog::Copy { dest, .. } | Dialog::Move { dest, .. } => dest,
+            Dialog::SelectGroup { pattern, .. } => pattern,
+            _ => return None,
+        };
+        Some(TextField { text, cursor })
     }
 
     /// Commit the text-input dialog based on its variant.
@@ -1416,6 +1377,67 @@ impl State {
 /// Convert a char index to a byte index in a string.
 fn char_to_byte(s: &str, char_idx: usize) -> usize {
     s.char_indices().nth(char_idx).map_or(s.len(), |(i, _)| i)
+}
+
+/// A single-line text editor over a borrowed string and char-index cursor.
+/// Shared by the command line and the text-input dialogs so the cursor
+/// arithmetic lives in one place.
+struct TextField<'a> {
+    text: &'a mut String,
+    cursor: &'a mut usize,
+}
+
+impl TextField<'_> {
+    fn len_chars(&self) -> usize {
+        self.text.chars().count()
+    }
+
+    fn insert(&mut self, s: &str) {
+        let byte_pos = char_to_byte(self.text, *self.cursor);
+        self.text.insert_str(byte_pos, s);
+        *self.cursor += s.chars().count();
+    }
+
+    /// Remove the character at the cursor (byte range of one char from `at`).
+    fn remove_char_at(&mut self, at: usize) {
+        let byte_pos = char_to_byte(self.text, at);
+        let next = self.text[byte_pos..]
+            .char_indices()
+            .nth(1)
+            .map_or(self.text.len(), |(i, _)| byte_pos + i);
+        self.text.drain(byte_pos..next);
+    }
+
+    fn backspace(&mut self) {
+        if *self.cursor > 0 {
+            *self.cursor -= 1;
+            self.remove_char_at(*self.cursor);
+        }
+    }
+
+    fn delete(&mut self) {
+        if *self.cursor < self.len_chars() {
+            self.remove_char_at(*self.cursor);
+        }
+    }
+
+    fn left(&mut self) {
+        *self.cursor = self.cursor.saturating_sub(1);
+    }
+
+    fn right(&mut self) {
+        if *self.cursor < self.len_chars() {
+            *self.cursor += 1;
+        }
+    }
+
+    fn home(&mut self) {
+        *self.cursor = 0;
+    }
+
+    fn end(&mut self) {
+        *self.cursor = self.len_chars();
+    }
 }
 
 fn push_recent<T: PartialEq>(list: &mut Vec<T>, item: T) {
