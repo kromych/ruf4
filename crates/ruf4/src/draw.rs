@@ -964,7 +964,97 @@ fn draw_dialog(ctx: &mut Context, state: &mut State, theme: &Theme, size: Size) 
             is_copy,
             ..
         } => draw_confirm_overwrite_dialog(ctx, theme, target_name, *is_copy, size),
+        Dialog::Progress {
+            title,
+            current,
+            files_done,
+            files_total,
+            bytes_done,
+            bytes_total,
+            cancelling,
+        } => draw_progress_dialog(
+            ctx,
+            theme,
+            title,
+            current,
+            (*files_done, *files_total),
+            (*bytes_done, *bytes_total),
+            *cancelling,
+            size,
+        ),
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_progress_dialog(
+    ctx: &mut Context,
+    theme: &Theme,
+    title: &str,
+    current: &str,
+    files: (u64, u64),
+    bytes: (u64, u64),
+    cancelling: bool,
+    size: Size,
+) {
+    let (files_done, files_total) = files;
+    let (bytes_done, bytes_total) = bytes;
+    let spec = DialogSpec {
+        bg: theme.dialog_info_bg,
+        ..DIALOG_BLUE_60
+    };
+    let caption = if cancelling {
+        arena_format!(ctx.arena(), "{title} - cancelling...")
+    } else {
+        arena_format!(ctx.arena(), "{title} - Esc=Cancel")
+    };
+    let w = dialog_begin(ctx, theme, &spec, &caption, 8, size);
+    {
+        let content_w = (w - 4).max(1) as usize;
+
+        let cur = truncate_to_display_width(current, content_w);
+        dialog_prompt(ctx, "cur", cur);
+        dialog_spacer(ctx, "sp-mid");
+
+        let frac = if bytes_total > 0 {
+            bytes_done as f64 / bytes_total as f64
+        } else if files_total > 0 {
+            files_done as f64 / files_total as f64
+        } else {
+            0.0
+        };
+        let gauge = gauge_text(frac, content_w);
+        dialog_prompt(ctx, "gauge", &gauge);
+
+        let counts = if bytes_total > 0 {
+            arena_format!(
+                ctx.arena(),
+                "{files_done}/{files_total} files   {} / {}",
+                crate::panel::format_size(bytes_done),
+                crate::panel::format_size(bytes_total),
+            )
+        } else {
+            arena_format!(ctx.arena(), "{files_done}/{files_total} files")
+        };
+        dialog_prompt(ctx, "counts", &counts);
+    }
+    dialog_end(ctx);
+}
+
+/// Render a fixed-width gauge such as `████████░░░░░░  57%`.
+fn gauge_text(frac: f64, width: usize) -> String {
+    let frac = frac.clamp(0.0, 1.0);
+    // Reserve 5 trailing columns for " 100%".
+    let bar_w = width.saturating_sub(5).max(1);
+    let filled = (frac * bar_w as f64).round() as usize;
+    let mut s = String::with_capacity(width + 4);
+    for _ in 0..filled {
+        s.push('█');
+    }
+    for _ in filled..bar_w {
+        s.push('░');
+    }
+    s.push_str(&format!(" {:>3}%", (frac * 100.0).round() as u32));
+    s
 }
 
 // Dialog framework

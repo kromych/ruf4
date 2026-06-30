@@ -6,11 +6,26 @@
 //! Pure operations (`ops_*`) take paths and return errors. State wrappers
 //! (`do_*`) read from `State`, call through, and refresh panels.
 
+use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::platform;
 use crate::state::{Dialog, State};
+
+/// The final path component as a lossy string, or empty if there is none.
+pub fn base_name(path: &Path) -> Cow<'_, str> {
+    path.file_name().unwrap_or_default().to_string_lossy()
+}
+
+/// The "copy/move onto itself" error message for `name`.
+pub fn same_file_error(name: &str, is_copy: bool) -> String {
+    if is_copy {
+        format!("{name}: cannot copy file to itself")
+    } else {
+        format!("{name}: source and destination are the same")
+    }
+}
 
 pub fn ops_mkdir(path: &Path) -> Result<(), String> {
     fs::create_dir_all(path).map_err(|e| format!("Cannot create \"{}\": {e}", path.display()))
@@ -219,20 +234,31 @@ pub fn do_mkdir(state: &mut State, name: &str) {
 
 pub fn do_delete(state: &mut State) {
     let files = state.active_panel().selected_or_current();
-    let errors = ops_delete(&files);
-    finish_operation(state, errors, true);
+    if files.is_empty() {
+        state.dialog = Dialog::None;
+        return;
+    }
+    state.start_job(crate::job::spawn_delete(files));
 }
 
 pub fn do_copy(state: &mut State, dest: &str) {
     let sources = state.active_panel().selected_or_current();
     let pairs = ops_build_pairs(&sources, dest);
-    continue_copy_move(state, pairs, Vec::new(), true);
+    if pairs.is_empty() {
+        state.dialog = Dialog::None;
+        return;
+    }
+    state.start_job(crate::job::spawn_copy_move(pairs, true));
 }
 
 pub fn do_move(state: &mut State, dest: &str) {
     let sources = state.active_panel().selected_or_current();
     let pairs = ops_build_pairs(&sources, dest);
-    continue_copy_move(state, pairs, Vec::new(), false);
+    if pairs.is_empty() {
+        state.dialog = Dialog::None;
+        return;
+    }
+    state.start_job(crate::job::spawn_copy_move(pairs, false));
 }
 
 pub fn do_rename(state: &mut State, new_name: &str) {
@@ -286,23 +312,8 @@ pub fn execute_command(state: &mut State) {
         return;
     }
 
-    match platform::run_command(&cmd, &cwd) {
-        Ok((text, _code)) => {
-            state.last_output = Some((cmd.clone(), text.clone()));
-            state.dialog = Dialog::ShellOutput {
-                command: cmd,
-                output: text,
-                scroll: 0,
-            };
-        }
-        Err(msg) => {
-            state.dialog = Dialog::Error { message: msg };
-        }
-    }
-
     state.command_line.clear();
-    state.left.refresh();
-    state.right.refresh();
+    state.start_job(crate::job::spawn_command(cmd, cwd));
 }
 
 fn parse_cd_command(cmd: &str) -> Option<String> {

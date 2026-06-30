@@ -11,6 +11,7 @@ use ruf4_tui::input::{Input, InputKey, InputMouseState, kbmod, vk};
 
 use crate::action::{self, Action, Binding};
 use crate::fileops;
+use crate::job::{Decision, Job, JobKind};
 use crate::panel::{Panel, SortBy};
 use crate::platform;
 use crate::preview::{self, Preview};
@@ -113,6 +114,17 @@ pub enum Dialog {
     Rename {
         name: String,
     },
+    /// Shown while a background [`Job`] runs. Fields mirror the worker's progress
+    /// and are refreshed every frame by [`State::poll_job`].
+    Progress {
+        title: &'static str,
+        current: String,
+        files_done: u64,
+        files_total: u64,
+        bytes_done: u64,
+        bytes_total: u64,
+        cancelling: bool,
+    },
 }
 
 pub struct State {
@@ -140,6 +152,8 @@ pub struct State {
     pub theme: Theme,
     pub last_output: Option<(String, String)>, // (command, output)
     last_click: Option<(Instant, Point)>,
+    /// The active background operation, if any.
+    pub job: Option<Job>,
 }
 
 // ── Construction ────────────────────────────────────────────────────────────
@@ -184,6 +198,7 @@ impl State {
             theme,
             last_output: None,
             last_click: None,
+            job: None,
         };
 
         if let Some(s) = settings::Settings::load() {
@@ -233,6 +248,7 @@ impl State {
             theme,
             last_output: None,
             last_click: None,
+            job: None,
         }
     }
 
@@ -588,6 +604,104 @@ impl State {
         };
     }
 
+    // ── Background jobs ──────────────────────────────────────────────────
+
+    pub fn job_active(&self) -> bool {
+        self.job.is_some()
+    }
+
+    /// Start a background operation and show its progress dialog.
+    pub fn start_job(&mut self, job: Job) {
+        self.dialog = Dialog::Progress {
+            title: job.kind.title(),
+            current: String::new(),
+            files_done: 0,
+            files_total: 0,
+            bytes_done: 0,
+            bytes_total: 0,
+            cancelling: false,
+        };
+        self.job = Some(job);
+    }
+
+    /// Poll the active job each frame: refresh the progress dialog, surface
+    /// overwrite prompts, and apply completion. No-op when no job runs.
+    pub fn poll_job(&mut self) {
+        let Some(job) = self.job.as_mut() else {
+            return;
+        };
+        let finished = job.poll();
+        let kind = job.kind;
+        let is_copy = job.is_copy();
+        let cancelling = job.cancelling;
+        let awaiting = job.awaiting_overwrite.clone();
+        let progress = job.progress.clone();
+        let command_output = if finished.is_some() {
+            job.command_output.take()
+        } else {
+            None
+        };
+
+        if let Some(errors) = finished {
+            self.job = None;
+            self.complete_job(kind, command_output, errors);
+            return;
+        }
+
+        if let Some(name) = awaiting {
+            // Reuse the overwrite dialog; the worker owns the remaining work.
+            if !matches!(self.dialog, Dialog::ConfirmOverwrite { .. }) {
+                self.dialog = Dialog::ConfirmOverwrite {
+                    target_name: name,
+                    pending: Vec::new(),
+                    errors: Vec::new(),
+                    is_copy,
+                };
+            }
+        } else {
+            self.dialog = Dialog::Progress {
+                title: kind.title(),
+                current: progress.current,
+                files_done: progress.files_done,
+                files_total: progress.files_total,
+                bytes_done: progress.bytes_done,
+                bytes_total: progress.bytes_total,
+                cancelling,
+            };
+        }
+    }
+
+    fn complete_job(
+        &mut self,
+        kind: JobKind,
+        command_output: Option<(String, String, i32)>,
+        errors: Vec<String>,
+    ) {
+        match kind {
+            JobKind::Command => {
+                if let Some((command, text, _code)) = command_output {
+                    self.last_output = Some((command.clone(), text.clone()));
+                    self.dialog = Dialog::ShellOutput {
+                        command,
+                        output: text,
+                        scroll: 0,
+                    };
+                } else if !errors.is_empty() {
+                    self.dialog = Dialog::Error {
+                        message: errors.join("\n"),
+                    };
+                } else {
+                    // Cancelled with no output.
+                    self.dialog = Dialog::None;
+                }
+                self.left.refresh();
+                self.right.refresh();
+            }
+            JobKind::Delete => fileops::finish_operation(self, errors, true),
+            JobKind::Copy | JobKind::Move => fileops::finish_operation(self, errors, false),
+        }
+    }
+
     // ── Query helpers ───────────────────────────────────────────────────
 
     pub fn dialog_is_none(&self) -> bool {
@@ -923,6 +1037,16 @@ impl State {
             Dialog::ConfirmOverwrite { .. } => self.handle_overwrite_dialog(ev),
             Dialog::ShellOutput { .. } => self.handle_scrollable_dialog(ev),
             Dialog::ListSelect { .. } => self.handle_list_select_dialog(ev),
+            Dialog::Progress { .. } => self.handle_progress_dialog(ev),
+        }
+    }
+
+    /// Progress dialog: the only interaction is cancellation.
+    fn handle_progress_dialog(&mut self, ev: &Input) {
+        let cancel = matches!(ev, Input::Keyboard(key) if *key == vk::ESCAPE)
+            || matches!(ev, Input::Text("c" | "C"));
+        if cancel && let Some(j) = self.job.as_mut() {
+            j.cancel();
         }
     }
 
@@ -1097,6 +1221,24 @@ impl State {
             Input::Keyboard(key) if *key == vk::ESCAPE => OverwriteAction::Cancel,
             _ => OverwriteAction::None,
         };
+
+        // While a background job runs, the worker owns the pending work; hand it
+        // the decision and let `poll_job` restore the progress dialog.
+        if self.job.is_some() {
+            let decision = match action {
+                OverwriteAction::Yes => Some(Decision::Overwrite),
+                OverwriteAction::No => Some(Decision::Skip),
+                OverwriteAction::All => Some(Decision::OverwriteAll),
+                OverwriteAction::Cancel => Some(Decision::Cancel),
+                OverwriteAction::None => None,
+            };
+            if let Some(d) = decision
+                && let Some(j) = self.job.as_mut()
+            {
+                j.answer_overwrite(d);
+            }
+            return;
+        }
 
         let Dialog::ConfirmOverwrite {
             pending,
