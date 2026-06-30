@@ -107,8 +107,6 @@ pub enum Dialog {
     },
     ConfirmOverwrite {
         target_name: String,
-        pending: Vec<(PathBuf, PathBuf)>,
-        errors: Vec<String>,
         is_copy: bool,
     },
     Rename {
@@ -559,11 +557,7 @@ impl State {
     fn choose_root(&mut self, path: PathBuf) {
         self.dialog = Dialog::None;
         self.record_dir_change(&path);
-        let panel = self.active_panel_mut();
-        panel.path = path;
-        panel.cursor = 0;
-        panel.scroll_offset = 0;
-        panel.refresh();
+        self.active_panel_mut().navigate_to(path);
     }
 
     // ── Layout feedback from draw pass ──────────────────────────────────
@@ -653,8 +647,6 @@ impl State {
             if !matches!(self.dialog, Dialog::ConfirmOverwrite { .. }) {
                 self.dialog = Dialog::ConfirmOverwrite {
                     target_name: name,
-                    pending: Vec::new(),
-                    errors: Vec::new(),
                     is_copy,
                 };
             }
@@ -1205,83 +1197,20 @@ impl State {
         }
     }
 
+    /// The overwrite prompt only appears while a worker is blocked on a decision;
+    /// translate the key and hand it back to the job.
     fn handle_overwrite_dialog(&mut self, ev: &Input) {
-        enum OverwriteAction {
-            Yes,
-            No,
-            All,
-            Cancel,
-            None,
-        }
-        let action = match ev {
-            Input::Text("y" | "Y") => OverwriteAction::Yes,
-            Input::Text("n" | "N") => OverwriteAction::No,
-            Input::Text("a" | "A") => OverwriteAction::All,
-            Input::Keyboard(key) if *key == vk::RETURN => OverwriteAction::Yes,
-            Input::Keyboard(key) if *key == vk::ESCAPE => OverwriteAction::Cancel,
-            _ => OverwriteAction::None,
+        let decision = match ev {
+            Input::Text("y" | "Y") => Decision::Overwrite,
+            Input::Text("n" | "N") => Decision::Skip,
+            Input::Text("a" | "A") => Decision::OverwriteAll,
+            Input::Keyboard(key) if *key == vk::RETURN => Decision::Overwrite,
+            Input::Keyboard(key) if *key == vk::ESCAPE => Decision::Cancel,
+            _ => return,
         };
-
-        // While a background job runs, the worker owns the pending work; hand it
-        // the decision and let `poll_job` restore the progress dialog.
-        if self.job.is_some() {
-            let decision = match action {
-                OverwriteAction::Yes => Some(Decision::Overwrite),
-                OverwriteAction::No => Some(Decision::Skip),
-                OverwriteAction::All => Some(Decision::OverwriteAll),
-                OverwriteAction::Cancel => Some(Decision::Cancel),
-                OverwriteAction::None => None,
-            };
-            if let Some(d) = decision
-                && let Some(j) = self.job.as_mut()
-            {
-                j.answer_overwrite(d);
-            }
-            return;
-        }
-
-        let Dialog::ConfirmOverwrite {
-            pending,
-            errors,
-            is_copy,
-            ..
-        } = &mut self.dialog
-        else {
-            return;
-        };
-
-        match action {
-            OverwriteAction::Yes => {
-                let is_copy = *is_copy;
-                let mut pending = std::mem::take(pending);
-                let mut errors = std::mem::take(errors);
-                if let Some((src, target)) = pending.first() {
-                    fileops::execute_file_op(src, target, is_copy, &mut errors);
-                }
-                pending.remove(0);
-                fileops::continue_copy_move(self, pending, errors, is_copy);
-            }
-            OverwriteAction::No => {
-                let is_copy = *is_copy;
-                let mut pending = std::mem::take(pending);
-                let errors = std::mem::take(errors);
-                pending.remove(0);
-                fileops::continue_copy_move(self, pending, errors, is_copy);
-            }
-            OverwriteAction::All => {
-                let is_copy = *is_copy;
-                let pending = std::mem::take(pending);
-                let mut errors = std::mem::take(errors);
-                for (src, target) in &pending {
-                    fileops::execute_file_op(src, target, is_copy, &mut errors);
-                }
-                fileops::finish_operation(self, errors, false);
-            }
-            OverwriteAction::Cancel => {
-                let errors = std::mem::take(errors);
-                fileops::finish_operation(self, errors, false);
-            }
-            OverwriteAction::None => {}
+        match self.job.as_mut() {
+            Some(j) => j.answer_overwrite(decision),
+            None => self.dialog = Dialog::None,
         }
     }
 
@@ -1379,11 +1308,7 @@ impl State {
             }
             ListSelectKind::DirHistory { entries } => {
                 if let Some(path) = entries.into_iter().nth(cursor) {
-                    let panel = self.active_panel_mut();
-                    panel.path = path;
-                    panel.cursor = 0;
-                    panel.scroll_offset = 0;
-                    panel.refresh();
+                    self.active_panel_mut().navigate_to(path);
                 }
             }
             ListSelectKind::CmdHistory { entries } => {

@@ -298,11 +298,7 @@ pub fn execute_command(state: &mut State) {
         let dest = fs::canonicalize(&raw).unwrap_or(raw);
         if dest.is_dir() {
             state.record_dir_change(&dest);
-            let panel = state.active_panel_mut();
-            panel.path = dest;
-            panel.cursor = 0;
-            panel.scroll_offset = 0;
-            panel.refresh();
+            state.active_panel_mut().navigate_to(dest);
         } else {
             state.dialog = Dialog::Error {
                 message: format!("cd: not a directory: {}", dest.display()),
@@ -325,53 +321,6 @@ fn parse_cd_command(cmd: &str) -> Option<String> {
             .strip_prefix("cd ")
             .map(|rest| rest.trim().to_string())
     }
-}
-
-pub fn continue_copy_move(
-    state: &mut State,
-    mut pending: Vec<(PathBuf, PathBuf)>,
-    mut errors: Vec<String>,
-    is_copy: bool,
-) {
-    while !pending.is_empty() {
-        let (src, target) = &pending[0];
-
-        if same_file(src, target) {
-            let name = src.file_name().unwrap_or_default().to_string_lossy();
-            let msg = if is_copy {
-                format!("{name}: cannot copy file to itself")
-            } else {
-                format!("{name}: source and destination are the same")
-            };
-            errors.push(msg);
-            pending.remove(0);
-            continue;
-        }
-
-        if target.exists() {
-            let target_name = target
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned();
-            state.dialog = Dialog::ConfirmOverwrite {
-                target_name,
-                pending,
-                errors,
-                is_copy,
-            };
-            return;
-        }
-
-        ops_execute_one(src, target, is_copy, &mut errors);
-        pending.remove(0);
-    }
-
-    finish_operation(state, errors, false);
-}
-
-pub fn execute_file_op(src: &Path, target: &Path, is_copy: bool, errors: &mut Vec<String>) {
-    ops_execute_one(src, target, is_copy, errors);
 }
 
 pub fn finish_operation(state: &mut State, errors: Vec<String>, active_only: bool) {

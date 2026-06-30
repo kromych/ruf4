@@ -196,6 +196,14 @@ impl Panel {
         self.cursor = self.cursor.min(self.entries.len().saturating_sub(1));
     }
 
+    /// Move this panel to `path`, resetting cursor and scroll, and reload entries.
+    pub fn navigate_to(&mut self, path: PathBuf) {
+        self.path = path;
+        self.cursor = 0;
+        self.scroll_offset = 0;
+        self.refresh();
+    }
+
     fn sort(&mut self) {
         let start = if self.entries.first().is_some_and(|e| e.name == "..") {
             1
