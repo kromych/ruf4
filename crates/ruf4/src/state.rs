@@ -146,6 +146,8 @@ pub struct State {
     last_click: Option<(Instant, Point)>,
     /// The active background operation, if any.
     pub job: Option<Job>,
+    /// Set after an external program returns, to force a full screen repaint.
+    repaint_requested: bool,
 }
 
 // ── Construction ────────────────────────────────────────────────────────────
@@ -190,6 +192,7 @@ impl State {
             theme,
             last_click: None,
             job: None,
+            repaint_requested: false,
         };
 
         if let Some(s) = settings::Settings::load() {
@@ -239,6 +242,7 @@ impl State {
             theme,
             last_click: None,
             job: None,
+            repaint_requested: false,
         }
     }
 
@@ -586,6 +590,17 @@ impl State {
 
     pub fn job_active(&self) -> bool {
         self.job.is_some()
+    }
+
+    /// Request a full screen repaint on the next frame (e.g. after an external
+    /// program returned the terminal).
+    pub fn request_repaint(&mut self) {
+        self.repaint_requested = true;
+    }
+
+    /// Consume a pending repaint request.
+    pub fn take_repaint_request(&mut self) -> bool {
+        std::mem::take(&mut self.repaint_requested)
     }
 
     /// Start a background operation and show its progress dialog.

@@ -312,10 +312,11 @@ pub fn execute_command(state: &mut State) {
 
     // External commands run in the foreground with the terminal handed back to
     // them, so interactive programs work. The TUI is suspended and restored by
-    // `run_interactive`.
+    // `run_interactive`; the screen must be fully repainted afterwards.
     if let Err(msg) = platform::run_interactive(&cmd, &cwd) {
         state.dialog = Dialog::Error { message: msg };
     }
+    state.request_repaint();
     state.left.refresh();
     state.right.refresh();
 }

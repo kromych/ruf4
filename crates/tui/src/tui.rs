@@ -861,6 +861,13 @@ impl Tui {
         self.settling_want = (self.settling_have + 1).min(20);
     }
 
+    /// Force the next [`Tui::render`] to re-emit the whole screen. Use after the
+    /// terminal was taken over by another program (the alternate screen was left
+    /// and re-entered), where the incremental diff would otherwise draw nothing.
+    pub fn request_full_redraw(&mut self) {
+        self.framebuffer.request_full_redraw();
+    }
+
     /// Renders the last frame into the framebuffer and returns the VT output.
     pub fn render<'a>(&mut self, arena: &'a Arena) -> BString<'a> {
         self.framebuffer.flip(self.size);

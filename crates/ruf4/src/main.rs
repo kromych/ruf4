@@ -127,6 +127,12 @@ fn run() -> std::io::Result<()> {
             state.apply_draw_result(r.term_size, r.menu_active);
         }
 
+        // After an external program took over the terminal, the incremental
+        // diff would draw nothing onto the freshly re-entered alternate screen.
+        if state.take_repaint_request() {
+            tui.request_full_redraw();
+        }
+
         let scratch = scratch_arena(None);
         let output = tui.render(&scratch);
         sys::write_stdout(&output);

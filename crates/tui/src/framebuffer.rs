@@ -115,6 +115,9 @@ pub struct Framebuffer {
     contrast_colors: [Cell<(StraightRgba, StraightRgba)>; CACHE_TABLE_SIZE],
     background_fill: StraightRgba,
     foreground_fill: StraightRgba,
+    /// When set, the next `flip` discards the previous frame so the whole screen
+    /// is re-emitted. Used after the alternate screen was left and re-entered.
+    force_redraw: bool,
 }
 
 impl Framebuffer {
@@ -124,6 +127,7 @@ impl Framebuffer {
             indexed_colors: DEFAULT_THEME,
             buffers: Default::default(),
             frame_counter: 0,
+            force_redraw: false,
             auto_colors: [
                 DEFAULT_THEME[IndexedColor::Black as usize],
                 DEFAULT_THEME[IndexedColor::BrightWhite as usize],
@@ -164,18 +168,28 @@ impl Framebuffer {
         }
     }
 
+    /// Force the next `flip` to re-emit the entire screen, discarding the
+    /// incremental diff against the previous frame.
+    pub fn request_full_redraw(&mut self) {
+        self.force_redraw = true;
+    }
+
     /// Begins a new frame with the given `size`.
     pub fn flip(&mut self, size: Size) {
-        if size != self.buffers[0].bg_bitmap.size {
+        let size_changed = size != self.buffers[0].bg_bitmap.size;
+        if size_changed {
             for buffer in &mut self.buffers {
                 buffer.text = LineBuffer::new(size);
                 buffer.bg_bitmap = Bitmap::new(size);
                 buffer.fg_bitmap = Bitmap::new(size);
                 buffer.attributes = AttributeBuffer::new(size);
             }
+        }
 
+        if size_changed || self.force_redraw {
+            self.force_redraw = false;
             let front = &mut self.buffers[self.frame_counter & 1];
-            // Trigger a full redraw. (Yes, it's a hack.)
+            // Trigger a full redraw by making the previous frame mismatch.
             front.fg_bitmap.fill(StraightRgba::from_le(1));
             // Trigger a cursor update as well, just to be sure.
             front.cursor = Cursor::new_invalid();
@@ -985,5 +999,43 @@ impl Cursor {
             pos: Point { x: -1, y: -1 },
             overtype: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame(fb: &mut Framebuffer, arena: &Arena, size: Size, text: &str) -> bool {
+        fb.flip(size);
+        fb.replace_text(0, 0, size.width, text);
+        !fb.render(arena).is_empty()
+    }
+
+    #[test]
+    fn request_full_redraw_reemits_unchanged_frame() {
+        let arena = Arena::new(4 * stdext::MEBI).unwrap();
+        let size = Size {
+            width: 12,
+            height: 3,
+        };
+        let mut fb = Framebuffer::new();
+
+        // First frame emits output; an identical second frame diffs to nothing.
+        assert!(frame(&mut fb, &arena, size, "hello"));
+        assert!(
+            !frame(&mut fb, &arena, size, "hello"),
+            "unchanged frame should produce no output"
+        );
+
+        // After request_full_redraw the identical frame is re-emitted in full.
+        fb.request_full_redraw();
+        assert!(
+            frame(&mut fb, &arena, size, "hello"),
+            "forced redraw must re-emit the whole screen"
+        );
+
+        // The flag is one-shot: the next unchanged frame is quiet again.
+        assert!(!frame(&mut fb, &arena, size, "hello"));
     }
 }
