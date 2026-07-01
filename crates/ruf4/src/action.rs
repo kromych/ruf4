@@ -48,7 +48,6 @@ pub enum Action {
     ChooseSort,
 
     // App
-    LastOutput,
     Help,
     SaveSettings,
     Refresh,
@@ -89,7 +88,6 @@ pub const ALL_ACTIONS: &[Action] = &[
     Action::SortBy(SortBy::Modified),
     Action::SortBy(SortBy::Size),
     Action::ChooseSort,
-    Action::LastOutput,
     Action::Help,
     Action::SaveSettings,
     Action::Refresh,
@@ -176,10 +174,6 @@ pub fn default_bindings() -> Vec<Binding> {
         Binding {
             key: vk::F10,
             action: Action::Quit,
-        },
-        Binding {
-            key: vk::F12,
-            action: Action::LastOutput,
         },
         // Ctrl combinations (cross-platform)
         Binding {
@@ -455,7 +449,6 @@ fn action_meta(action: Action) -> (&'static str, &'static str) {
         Action::CmdHistory => ("cmd_history", "Command history"),
         Action::FocusMenu => ("focus_menu", "Focus menubar"),
         Action::Quit => ("quit", "Quit"),
-        Action::LastOutput => ("last_output", "Last output"),
     }
 }
 
@@ -524,7 +517,6 @@ pub fn build_help_text(bindings: &[Binding]) -> Vec<(String, &'static str, Actio
         Some(Action::Delete),
         Some(Action::FocusMenu),
         Some(Action::Quit),
-        Some(Action::LastOutput),
         None, // separator
         Some(Action::CursorUp),
         Some(Action::CursorDown),

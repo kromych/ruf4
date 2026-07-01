@@ -10,7 +10,6 @@
 //! `fileops` are reused for the actual work.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvError, Sender, channel};
@@ -26,7 +25,6 @@ pub enum JobKind {
     Copy,
     Move,
     Delete,
-    Command,
 }
 
 impl JobKind {
@@ -35,7 +33,6 @@ impl JobKind {
             JobKind::Copy => "Copying",
             JobKind::Move => "Moving",
             JobKind::Delete => "Deleting",
-            JobKind::Command => "Running",
         }
     }
 }
@@ -55,12 +52,6 @@ enum JobEvent {
     Progress(Progress),
     /// The worker hit an existing target and is blocked waiting for a [`Decision`].
     NeedOverwrite(String),
-    /// Captured output of a [`JobKind::Command`] job.
-    CommandOutput {
-        command: String,
-        text: String,
-        code: i32,
-    },
     /// Terminal message; carries the accumulated per-file errors.
     Finished {
         errors: Vec<String>,
@@ -83,8 +74,6 @@ pub struct Job {
     /// `Some(name)` while the worker is blocked on an overwrite decision.
     pub awaiting_overwrite: Option<String>,
     pub cancelling: bool,
-    /// `Some` once a command job produced output: (command, text, exit code).
-    pub command_output: Option<(String, String, i32)>,
     handle: Option<JoinHandle<()>>,
     events: Receiver<JobEvent>,
     decisions: Sender<Decision>,
@@ -126,13 +115,6 @@ impl Job {
             match ev {
                 JobEvent::Progress(p) => self.progress = p,
                 JobEvent::NeedOverwrite(name) => self.awaiting_overwrite = Some(name),
-                JobEvent::CommandOutput {
-                    command,
-                    text,
-                    code,
-                } => {
-                    self.command_output = Some((command, text, code));
-                }
                 JobEvent::Finished { errors } => finished = Some(errors),
             }
         }
@@ -164,13 +146,6 @@ pub fn spawn_delete(paths: Vec<PathBuf>) -> Job {
     })
 }
 
-/// Spawn an external command job. `cmd` runs through the platform shell in `cwd`.
-pub fn spawn_command(cmd: String, cwd: PathBuf) -> Job {
-    spawn(JobKind::Command, move |tx, _rx, cancel| {
-        run_command(&cmd, &cwd, &tx, &cancel)
-    })
-}
-
 fn spawn<F>(kind: JobKind, body: F) -> Job
 where
     F: FnOnce(Sender<JobEvent>, Receiver<Decision>, Arc<AtomicBool>) + Send + 'static,
@@ -185,7 +160,6 @@ where
         progress: Progress::default(),
         awaiting_overwrite: None,
         cancelling: false,
-        command_output: None,
         handle: Some(handle),
         events: event_rx,
         decisions: decision_tx,
@@ -370,108 +344,6 @@ fn run_delete(paths: Vec<PathBuf>, tx: &Sender<JobEvent>, cancel: &AtomicBool) {
     }
 
     let _ = tx.send(JobEvent::Finished { errors });
-}
-
-fn run_command(cmd: &str, cwd: &Path, tx: &Sender<JobEvent>, cancel: &AtomicBool) {
-    use std::io::Read;
-    use std::process::Stdio;
-
-    let _ = tx.send(JobEvent::Progress(Progress {
-        current: cmd.to_string(),
-        ..Progress::default()
-    }));
-
-    #[cfg(windows)]
-    let mut builder = {
-        let mut c = Command::new("cmd.exe");
-        c.arg("/C").arg(cmd);
-        c
-    };
-    #[cfg(not(windows))]
-    let mut builder = {
-        let mut c = Command::new("sh");
-        c.arg("-c").arg(cmd);
-        c
-    };
-    builder
-        .current_dir(cwd)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    let mut child = match builder.spawn() {
-        Ok(c) => c,
-        Err(e) => {
-            let _ = tx.send(JobEvent::Finished {
-                errors: vec![format!("Failed to execute \"{cmd}\": {e}")],
-            });
-            return;
-        }
-    };
-
-    // Drain stdout/stderr on their own threads so a chatty child cannot deadlock
-    // by filling a pipe buffer while we poll for completion.
-    let mut stdout_pipe = child.stdout.take();
-    let mut stderr_pipe = child.stderr.take();
-    let stdout_reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(p) = stdout_pipe.as_mut() {
-            let _ = p.read_to_end(&mut buf);
-        }
-        buf
-    });
-    let stderr_reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(p) = stderr_pipe.as_mut() {
-            let _ = p.read_to_end(&mut buf);
-        }
-        buf
-    });
-
-    let mut killed = false;
-    let status = loop {
-        if cancelled(cancel) {
-            let _ = child.kill();
-            killed = true;
-        }
-        match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
-            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
-            Err(e) => {
-                let _ = tx.send(JobEvent::Finished {
-                    errors: vec![format!("{cmd}: {e}")],
-                });
-                break None;
-            }
-        }
-    };
-
-    let stdout = stdout_reader.join().unwrap_or_default();
-    let stderr = stderr_reader.join().unwrap_or_default();
-
-    let Some(status) = status else { return };
-    if killed {
-        let _ = tx.send(JobEvent::Finished { errors: Vec::new() });
-        return;
-    }
-
-    let mut text = String::from_utf8_lossy(&stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&stderr);
-    if !stderr.is_empty() {
-        if !text.is_empty() {
-            text.push('\n');
-        }
-        text.push_str(&stderr);
-    }
-    if text.is_empty() {
-        text = format!("(exit code: {status})");
-    }
-    let code = status.code().unwrap_or(-1);
-    let _ = tx.send(JobEvent::CommandOutput {
-        command: cmd.to_string(),
-        text,
-        code,
-    });
-    let _ = tx.send(JobEvent::Finished { errors: Vec::new() });
 }
 
 // ── Progress helpers ─────────────────────────────────────────────────────────

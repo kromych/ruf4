@@ -309,7 +309,15 @@ pub fn execute_command(state: &mut State) {
     }
 
     state.command_line.clear();
-    state.start_job(crate::job::spawn_command(cmd, cwd));
+
+    // External commands run in the foreground with the terminal handed back to
+    // them, so interactive programs work. The TUI is suspended and restored by
+    // `run_interactive`.
+    if let Err(msg) = platform::run_interactive(&cmd, &cwd) {
+        state.dialog = Dialog::Error { message: msg };
+    }
+    state.left.refresh();
+    state.right.refresh();
 }
 
 fn parse_cd_command(cmd: &str) -> Option<String> {

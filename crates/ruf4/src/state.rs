@@ -84,11 +84,6 @@ pub enum Dialog {
         files: Vec<String>,
         dest: String,
     },
-    ShellOutput {
-        command: String,
-        output: String,
-        scroll: usize,
-    },
     ConfirmQuit {
         save_settings: bool,
     },
@@ -148,7 +143,6 @@ pub struct State {
     pub bindings: Vec<Binding>,
     pub help_text: Vec<(String, &'static str, Action)>,
     pub theme: Theme,
-    pub last_output: Option<(String, String)>, // (command, output)
     last_click: Option<(Instant, Point)>,
     /// The active background operation, if any.
     pub job: Option<Job>,
@@ -194,7 +188,6 @@ impl State {
             bindings,
             help_text,
             theme,
-            last_output: None,
             last_click: None,
             job: None,
         };
@@ -244,7 +237,6 @@ impl State {
             bindings,
             help_text,
             theme,
-            last_output: None,
             last_click: None,
             job: None,
         }
@@ -386,15 +378,6 @@ impl State {
             Action::ChangeRoot => self.open_choose_root(),
             Action::DirHistory => self.open_dir_history(),
             Action::CmdHistory => self.open_cmd_history(),
-            Action::LastOutput => {
-                if let Some((ref cmd, ref out)) = self.last_output {
-                    self.dialog = Dialog::ShellOutput {
-                        command: cmd.clone(),
-                        output: out.clone(),
-                        scroll: 0,
-                    };
-                }
-            }
             Action::FocusMenu => self.want_menu_focus = true,
             Action::Quit => {
                 self.dialog = Dialog::ConfirmQuit {
@@ -631,15 +614,10 @@ impl State {
         let cancelling = job.cancelling;
         let awaiting = job.awaiting_overwrite.clone();
         let progress = job.progress.clone();
-        let command_output = if finished.is_some() {
-            job.command_output.take()
-        } else {
-            None
-        };
 
         if let Some(errors) = finished {
             self.job = None;
-            self.complete_job(kind, command_output, errors);
+            self.complete_job(kind, errors);
             return;
         }
 
@@ -664,32 +642,8 @@ impl State {
         }
     }
 
-    fn complete_job(
-        &mut self,
-        kind: JobKind,
-        command_output: Option<(String, String, i32)>,
-        errors: Vec<String>,
-    ) {
+    fn complete_job(&mut self, kind: JobKind, errors: Vec<String>) {
         match kind {
-            JobKind::Command => {
-                if let Some((command, text, _code)) = command_output {
-                    self.last_output = Some((command.clone(), text.clone()));
-                    self.dialog = Dialog::ShellOutput {
-                        command,
-                        output: text,
-                        scroll: 0,
-                    };
-                } else if !errors.is_empty() {
-                    self.dialog = Dialog::Error {
-                        message: errors.join("\n"),
-                    };
-                } else {
-                    // Cancelled with no output.
-                    self.dialog = Dialog::None;
-                }
-                self.left.refresh();
-                self.right.refresh();
-            }
             JobKind::Delete => fileops::finish_operation(self, errors, true),
             JobKind::Copy | JobKind::Move => fileops::finish_operation(self, errors, false),
         }
@@ -1029,7 +983,6 @@ impl State {
                 self.handle_quit_dialog(ev, save);
             }
             Dialog::ConfirmOverwrite { .. } => self.handle_overwrite_dialog(ev),
-            Dialog::ShellOutput { .. } => self.handle_scrollable_dialog(ev),
             Dialog::ListSelect { .. } => self.handle_list_select_dialog(ev),
             Dialog::Progress { .. } => self.handle_progress_dialog(ev),
         }
@@ -1192,38 +1145,6 @@ impl State {
         }
     }
 
-    fn handle_scrollable_dialog(&mut self, ev: &Input) {
-        let Dialog::ShellOutput { scroll, output, .. } = &mut self.dialog else {
-            return;
-        };
-        match ev {
-            Input::Keyboard(key) => {
-                let key = *key;
-                if key == (kbmod::CTRL | vk::C) {
-                    platform::copy_to_clipboard(output);
-                    return;
-                }
-                if key == vk::ESCAPE || key == vk::RETURN || key == vk::SPACE {
-                    *scroll = usize::MAX; // signal dismiss (finalize_dialog cleans up)
-                } else if key == vk::UP {
-                    *scroll = scroll.saturating_sub(1);
-                } else if key == vk::DOWN {
-                    *scroll += 1;
-                } else if key == vk::PRIOR {
-                    *scroll = scroll.saturating_sub(PAGE_SCROLL);
-                } else if key == vk::NEXT {
-                    *scroll += PAGE_SCROLL;
-                } else if key == vk::HOME {
-                    *scroll = 0;
-                }
-            }
-            Input::Mouse(mouse) if mouse.state == InputMouseState::Left => {
-                *scroll = usize::MAX;
-            }
-            _ => {}
-        }
-    }
-
     /// Unified list-selection dialog handler.
     fn handle_list_select_dialog(&mut self, ev: &Input) {
         // Dismiss / commit (needs full &mut self).
@@ -1366,25 +1287,6 @@ impl State {
                 return; // separator row
             }
             self.execute_action(*action);
-        }
-    }
-}
-
-// After handle_dialog_input, clean up sentinel values.
-// ShellOutput uses usize::MAX as a "dismiss" signal because the handler
-// receives &mut scroll but cannot call self.dialog = Dialog::None.
-impl State {
-    /// Call after handle_dialog_input to finalize deferred state changes.
-    pub fn finalize_dialog(&mut self) {
-        if let Dialog::ShellOutput {
-            scroll,
-            command,
-            output,
-        } = &self.dialog
-            && *scroll == usize::MAX
-        {
-            self.last_output = Some((command.clone(), output.clone()));
-            self.dialog = Dialog::None;
         }
     }
 }

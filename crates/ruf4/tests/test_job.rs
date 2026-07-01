@@ -191,17 +191,3 @@ fn state_delete_flow_runs_and_refreshes() {
     );
     cleanup(&root);
 }
-
-#[test]
-fn command_captures_output() {
-    let cwd = temp_dir();
-    let mut job = job::spawn_command("echo job-output".to_string(), cwd.clone());
-
-    let errors = drive(&mut job, no_overwrite);
-    assert!(errors.is_empty(), "errors: {errors:?}");
-
-    let (_cmd, text, code) = job.command_output.clone().expect("command output");
-    assert!(text.contains("job-output"), "got: {text:?}");
-    assert_eq!(code, 0);
-    cleanup(&cwd);
-}

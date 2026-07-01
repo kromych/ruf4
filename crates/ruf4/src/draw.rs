@@ -928,11 +928,6 @@ fn draw_dialog(ctx: &mut Context, state: &mut State, theme: &Theme, size: Size) 
         }
         Dialog::Info { message } => draw_info_dialog(ctx, theme, message, size),
         Dialog::Error { message } => draw_error_dialog(ctx, theme, message, size),
-        Dialog::ShellOutput {
-            command,
-            output,
-            scroll,
-        } => draw_shell_output_dialog(ctx, theme, command, output, *scroll, size),
         Dialog::ConfirmQuit { save_settings } => {
             draw_confirm_quit_dialog(ctx, theme, save_settings, size)
         }
@@ -1423,80 +1418,6 @@ fn draw_help_dialog(
         }
     }
     dialog_end(ctx);
-}
-
-fn draw_shell_output_dialog(
-    ctx: &mut Context,
-    theme: &Theme,
-    command: &str,
-    output: &str,
-    scroll: usize,
-    size: Size,
-) {
-    let w = (size.width - 4).max(20);
-    let h = (size.height - 4).max(8);
-
-    let title = arena_format!(ctx.arena(), "$ {command} - Ctrl+C=Copy  Esc/Enter=Close");
-    ctx.modal_begin("shell-dialog", &title);
-    ctx.attr_intrinsic_size(Size {
-        width: w,
-        height: h,
-    });
-    ctx.attr_background_rgba(ctx.indexed(theme.dialog_shell_bg));
-    ctx.attr_foreground_rgba(ctx.indexed(theme.dialog_shell_fg));
-    {
-        let lines: Vec<&str> = output.lines().collect();
-        let visible = (h - 2).max(1) as usize;
-        let max_scroll = lines.len().saturating_sub(visible);
-        let scroll = scroll.min(max_scroll);
-        let end = (scroll + visible).min(lines.len());
-        let thumb = scrollbar_thumb(lines.len(), visible, scroll);
-        let content_w = if thumb.is_some() { w - 5 } else { w - 4 };
-
-        for (i, line) in lines[scroll..end].iter().enumerate() {
-            ctx.next_block_id_mixin(i as u64);
-            ctx.block_begin("out-line");
-            ctx.attr_intrinsic_size(Size {
-                width: if thumb.is_some() { w - 3 } else { w - 4 },
-                height: 1,
-            });
-            ctx.attr_foreground_rgba(ctx.indexed(theme.dialog_shell_text));
-
-            if thumb.is_some() {
-                let line_display = truncate_to_display_width(line, content_w as usize);
-                let pad = content_w as usize - str_display_width(line_display);
-                let sb = sb_char(thumb, i);
-                let text = arena_format!(ctx.arena(), "{line_display}{:pad$} {sb}", "");
-                ctx.label("out-text", &text);
-            } else {
-                ctx.label("out-text", line);
-            }
-            ctx.block_end();
-        }
-
-        // Fill remaining visible rows with scrollbar track.
-        if thumb.is_some() {
-            for i in (end - scroll)..visible {
-                ctx.next_block_id_mixin((i + lines.len()) as u64);
-                ctx.block_begin("out-line");
-                ctx.attr_intrinsic_size(Size {
-                    width: w - 3,
-                    height: 1,
-                });
-                ctx.attr_foreground_rgba(ctx.indexed(theme.dialog_shell_text));
-                let sb = sb_char(thumb, i);
-                let text = arena_format!(ctx.arena(), "{:pad$} {sb}", "", pad = content_w as usize);
-                ctx.label("out-text", &text);
-                ctx.block_end();
-            }
-
-            let indicator =
-                arena_format!(ctx.arena(), " [{}-{} of {}]", scroll + 1, end, lines.len());
-            ctx.attr_foreground_rgba(ctx.indexed(theme.dialog_shell_scroll_info));
-            ctx.label("scroll-info", &indicator);
-        }
-    }
-    ctx.modal_end();
 }
 
 fn draw_select_group_dialog(

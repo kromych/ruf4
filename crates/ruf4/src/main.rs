@@ -98,7 +98,6 @@ fn run() -> std::io::Result<()> {
                 break;
             }
             state.poll_job();
-            state.finalize_dialog();
 
             state.update_preview();
 

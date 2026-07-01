@@ -73,57 +73,82 @@ pub fn switch_modes() -> io::Result<()> {
         // Get the original terminal modes so we can disable raw mode on exit.
         let mut termios = MaybeUninit::<libc::termios>::uninit();
         check_int_return(libc::tcgetattr(STATE.stdout, termios.as_mut_ptr()))?;
-        let mut termios = termios.assume_init();
+        let termios = termios.assume_init();
         STATE.stdout_initial_termios = Some(termios);
 
-        termios.c_iflag &= !(
-            // When neither IGNBRK...
-            libc::IGNBRK
-            // ...nor BRKINT are set, a BREAK reads as a null byte ('\0'), ...
-            | libc::BRKINT
-            // ...except when PARMRK is set, in which case it reads as the sequence \377 \0 \0.
-            | libc::PARMRK
-            // Disable input parity checking.
-            | libc::INPCK
-            // Disable stripping of eighth bit.
-            | libc::ISTRIP
-            // Disable mapping of NL to CR on input.
-            | libc::INLCR
-            // Disable ignoring CR on input.
-            | libc::IGNCR
-            // Disable mapping of CR to NL on input.
-            | libc::ICRNL
-            // Disable software flow control.
-            | libc::IXON
-        );
-        // Disable output processing.
-        termios.c_oflag &= !libc::OPOST;
-        termios.c_cflag &= !(
-            // Reset character size mask.
-            libc::CSIZE
-            // Disable parity generation.
-            | libc::PARENB
-        );
-        // Set character size back to 8 bits.
-        termios.c_cflag |= libc::CS8;
-        termios.c_lflag &= !(
-            // Disable signal generation (SIGINT, SIGTSTP, SIGQUIT).
-            libc::ISIG
-            // Disable canonical mode (line buffering).
-            | libc::ICANON
-            // Disable echoing of input characters.
-            | libc::ECHO
-            // Disable echoing of NL.
-            | libc::ECHONL
-            // Disable extended input processing (e.g. Ctrl-V).
-            | libc::IEXTEN
-        );
-
         // Set the terminal to raw mode.
-        termios.c_lflag &= !(libc::ICANON | libc::ECHO);
-        check_int_return(libc::tcsetattr(STATE.stdout, libc::TCSANOW, &termios))?;
+        let raw = raw_termios(termios);
+        check_int_return(libc::tcsetattr(STATE.stdout, libc::TCSANOW, &raw))?;
 
         Ok(())
+    }
+}
+
+/// Derive raw-mode terminal settings from the initial (cooked) `termios`.
+fn raw_termios(mut termios: libc::termios) -> libc::termios {
+    termios.c_iflag &= !(
+        // When neither IGNBRK...
+        libc::IGNBRK
+        // ...nor BRKINT are set, a BREAK reads as a null byte ('\0'), ...
+        | libc::BRKINT
+        // ...except when PARMRK is set, in which case it reads as the sequence \377 \0 \0.
+        | libc::PARMRK
+        // Disable input parity checking.
+        | libc::INPCK
+        // Disable stripping of eighth bit.
+        | libc::ISTRIP
+        // Disable mapping of NL to CR on input.
+        | libc::INLCR
+        // Disable ignoring CR on input.
+        | libc::IGNCR
+        // Disable mapping of CR to NL on input.
+        | libc::ICRNL
+        // Disable software flow control.
+        | libc::IXON
+    );
+    // Disable output processing.
+    termios.c_oflag &= !libc::OPOST;
+    termios.c_cflag &= !(
+        // Reset character size mask.
+        libc::CSIZE
+        // Disable parity generation.
+        | libc::PARENB
+    );
+    // Set character size back to 8 bits.
+    termios.c_cflag |= libc::CS8;
+    termios.c_lflag &= !(
+        // Disable signal generation (SIGINT, SIGTSTP, SIGQUIT).
+        libc::ISIG
+        // Disable canonical mode (line buffering).
+        | libc::ICANON
+        // Disable echoing of input characters.
+        | libc::ECHO
+        // Disable echoing of NL.
+        | libc::ECHONL
+        // Disable extended input processing (e.g. Ctrl-V).
+        | libc::IEXTEN
+    );
+    termios
+}
+
+/// Restore the terminal to the modes present before [`switch_modes`], so an
+/// external program can run with normal line discipline. Pair with [`resume`].
+pub fn suspend() {
+    unsafe {
+        #[allow(static_mut_refs)]
+        if let Some(termios) = STATE.stdout_initial_termios.as_ref() {
+            libc::tcsetattr(STATE.stdout, libc::TCSAFLUSH, termios);
+        }
+    }
+}
+
+/// Re-enter raw mode after [`suspend`].
+pub fn resume() {
+    unsafe {
+        if let Some(termios) = STATE.stdout_initial_termios {
+            let raw = raw_termios(termios);
+            libc::tcsetattr(STATE.stdout, libc::TCSANOW, &raw);
+        }
     }
 }
 
