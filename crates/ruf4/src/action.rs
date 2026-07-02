@@ -48,7 +48,6 @@ pub enum Action {
     ChooseSort,
 
     // App
-    LastOutput,
     Help,
     SaveSettings,
     Refresh,
@@ -58,6 +57,46 @@ pub enum Action {
     FocusMenu,
     Quit,
 }
+
+/// Every [`Action`] value, used to derive [`parse_action`] from [`action_str`]
+/// and to drive round-trip tests. Keep in step with the [`Action`] enum.
+pub const ALL_ACTIONS: &[Action] = &[
+    Action::CursorUp,
+    Action::CursorDown,
+    Action::PageUp,
+    Action::PageDown,
+    Action::CursorHome,
+    Action::CursorEnd,
+    Action::OpenOrEnter,
+    Action::ParentDir,
+    Action::SwitchPanel,
+    Action::ToggleSelect,
+    Action::SelectGroup,
+    Action::DeselectGroup,
+    Action::InvertSelection,
+    Action::SelectAll,
+    Action::DeselectAll,
+    Action::Copy,
+    Action::Move,
+    Action::Rename,
+    Action::Delete,
+    Action::MkDir,
+    Action::ToggleQuickView,
+    Action::ToggleHidden,
+    Action::SortBy(SortBy::Name),
+    Action::SortBy(SortBy::Extension),
+    Action::SortBy(SortBy::Modified),
+    Action::SortBy(SortBy::Size),
+    Action::ChooseSort,
+    Action::Help,
+    Action::SaveSettings,
+    Action::Refresh,
+    Action::ChangeRoot,
+    Action::DirHistory,
+    Action::CmdHistory,
+    Action::FocusMenu,
+    Action::Quit,
+];
 
 impl Action {
     /// "Immediate" actions are dispatched from the keyboard handler in
@@ -135,10 +174,6 @@ pub fn default_bindings() -> Vec<Binding> {
         Binding {
             key: vk::F10,
             action: Action::Quit,
-        },
-        Binding {
-            key: vk::F12,
-            action: Action::LastOutput,
         },
         // Ctrl combinations (cross-platform)
         Binding {
@@ -289,6 +324,67 @@ pub fn key_for(bindings: &[Binding], action: Action) -> InputKey {
         .unwrap_or(vk::NULL)
 }
 
+// ── Key name table ─────────────────────────────────────────────────────────
+
+/// Base keys and their human-readable names. Single source of truth for both
+/// [`key_display_name`] and [`parse_key_name`], so the two directions cannot
+/// drift apart. (Modifier prefixes like `Ctrl+` are handled separately.)
+const KEY_NAMES: &[(InputKey, &str)] = &[
+    (vk::F1, "F1"),
+    (vk::F2, "F2"),
+    (vk::F3, "F3"),
+    (vk::F4, "F4"),
+    (vk::F5, "F5"),
+    (vk::F6, "F6"),
+    (vk::F7, "F7"),
+    (vk::F8, "F8"),
+    (vk::F9, "F9"),
+    (vk::F10, "F10"),
+    (vk::F11, "F11"),
+    (vk::F12, "F12"),
+    (vk::UP, "Up"),
+    (vk::DOWN, "Down"),
+    (vk::LEFT, "Left"),
+    (vk::RIGHT, "Right"),
+    (vk::PRIOR, "PgUp"),
+    (vk::NEXT, "PgDn"),
+    (vk::HOME, "Home"),
+    (vk::END, "End"),
+    (vk::RETURN, "Enter"),
+    (vk::ESCAPE, "Esc"),
+    (vk::TAB, "Tab"),
+    (vk::BACK, "Backspace"),
+    (vk::INSERT, "Ins"),
+    (vk::DELETE, "Delete"),
+    (vk::SPACE, "Space"),
+    (vk::A, "A"),
+    (vk::B, "B"),
+    (vk::C, "C"),
+    (vk::D, "D"),
+    (vk::E, "E"),
+    (vk::F, "F"),
+    (vk::G, "G"),
+    (vk::H, "H"),
+    (vk::I, "I"),
+    (vk::J, "J"),
+    (vk::K, "K"),
+    (vk::L, "L"),
+    (vk::M, "M"),
+    (vk::N, "N"),
+    (vk::O, "O"),
+    (vk::P, "P"),
+    (vk::Q, "Q"),
+    (vk::R, "R"),
+    (vk::S, "S"),
+    (vk::T, "T"),
+    (vk::U, "U"),
+    (vk::V, "V"),
+    (vk::W, "W"),
+    (vk::X, "X"),
+    (vk::Y, "Y"),
+    (vk::Z, "Z"),
+];
+
 // ── Help text generation ───────────────────────────────────────────────────
 
 /// Format a key for display (e.g. "Ctrl+F3", "F5", "Tab").
@@ -307,192 +403,71 @@ pub fn key_display_name(key: InputKey) -> String {
         prefix.push_str("Shift+");
     }
 
-    let name: &str = match base {
-        k if k == vk::F1 => "F1",
-        k if k == vk::F2 => "F2",
-        k if k == vk::F3 => "F3",
-        k if k == vk::F4 => "F4",
-        k if k == vk::F5 => "F5",
-        k if k == vk::F6 => "F6",
-        k if k == vk::F7 => "F7",
-        k if k == vk::F8 => "F8",
-        k if k == vk::F9 => "F9",
-        k if k == vk::F10 => "F10",
-        k if k == vk::F11 => "F11",
-        k if k == vk::F12 => "F12",
-        k if k == vk::UP => "Up",
-        k if k == vk::DOWN => "Down",
-        k if k == vk::LEFT => "Left",
-        k if k == vk::RIGHT => "Right",
-        k if k == vk::PRIOR => "PgUp",
-        k if k == vk::NEXT => "PgDn",
-        k if k == vk::HOME => "Home",
-        k if k == vk::END => "End",
-        k if k == vk::RETURN => "Enter",
-        k if k == vk::ESCAPE => "Esc",
-        k if k == vk::TAB => "Tab",
-        k if k == vk::BACK => "Backspace",
-        k if k == vk::INSERT => "Ins",
-        k if k == vk::DELETE => "Delete",
-        k if k == vk::SPACE => "Space",
-        k if k == vk::A => "A",
-        k if k == vk::B => "B",
-        k if k == vk::C => "C",
-        k if k == vk::D => "D",
-        k if k == vk::E => "E",
-        k if k == vk::F => "F",
-        k if k == vk::G => "G",
-        k if k == vk::H => "H",
-        k if k == vk::I => "I",
-        k if k == vk::J => "J",
-        k if k == vk::K => "K",
-        k if k == vk::L => "L",
-        k if k == vk::M => "M",
-        k if k == vk::N => "N",
-        k if k == vk::O => "O",
-        k if k == vk::P => "P",
-        k if k == vk::Q => "Q",
-        k if k == vk::R => "R",
-        k if k == vk::S => "S",
-        k if k == vk::T => "T",
-        k if k == vk::U => "U",
-        k if k == vk::V => "V",
-        k if k == vk::W => "W",
-        k if k == vk::X => "X",
-        k if k == vk::Y => "Y",
-        k if k == vk::Z => "Z",
-        _ => return format!("{prefix}?"),
-    };
-    format!("{prefix}{name}")
+    match KEY_NAMES.iter().find(|(k, _)| *k == base) {
+        Some((_, name)) => format!("{prefix}{name}"),
+        None => format!("{prefix}?"),
+    }
+}
+
+/// The stable settings name and the human-readable label for an action. Single
+/// exhaustive match so the compiler flags any new [`Action`] variant that is
+/// missing here. [`action_str`] and [`action_label`] read from it.
+fn action_meta(action: Action) -> (&'static str, &'static str) {
+    match action {
+        Action::CursorUp => ("cursor_up", "Navigate up"),
+        Action::CursorDown => ("cursor_down", "Navigate down"),
+        Action::PageUp => ("page_up", "Page up"),
+        Action::PageDown => ("page_down", "Page down"),
+        Action::CursorHome => ("cursor_home", "First entry"),
+        Action::CursorEnd => ("cursor_end", "Last entry"),
+        Action::OpenOrEnter => ("open_or_enter", "Open / enter directory"),
+        Action::ParentDir => ("parent_dir", "Parent directory"),
+        Action::SwitchPanel => ("switch_panel", "Switch panel"),
+        Action::ToggleSelect => ("toggle_select", "Toggle selection"),
+        Action::SelectGroup => ("select_group", "Select group"),
+        Action::DeselectGroup => ("deselect_group", "Deselect group"),
+        Action::InvertSelection => ("invert_selection", "Invert selection"),
+        Action::SelectAll => ("select_all", "Select all"),
+        Action::DeselectAll => ("deselect_all", "Deselect all"),
+        Action::Copy => ("copy", "Copy"),
+        Action::Move => ("move", "Rename / Move"),
+        Action::Rename => ("rename", "Rename"),
+        Action::Delete => ("delete", "Delete"),
+        Action::MkDir => ("mkdir", "Make directory"),
+        Action::ToggleQuickView => ("toggle_quick_view", "Toggle quick view"),
+        Action::ToggleHidden => ("toggle_hidden", "Toggle hidden files"),
+        Action::SortBy(SortBy::Name) => ("sort_by_name", "Sort by name"),
+        Action::SortBy(SortBy::Extension) => ("sort_by_extension", "Sort by extension"),
+        Action::SortBy(SortBy::Modified) => ("sort_by_modified", "Sort by date"),
+        Action::SortBy(SortBy::Size) => ("sort_by_size", "Sort by size"),
+        Action::ChooseSort => ("choose_sort", "Choose sort mode"),
+        Action::Help => ("help", "Help"),
+        Action::SaveSettings => ("save_settings", "Save settings"),
+        Action::Refresh => ("refresh", "Refresh panels"),
+        Action::ChangeRoot => ("change_root", "Change root"),
+        Action::DirHistory => ("dir_history", "Directory history"),
+        Action::CmdHistory => ("cmd_history", "Command history"),
+        Action::FocusMenu => ("focus_menu", "Focus menubar"),
+        Action::Quit => ("quit", "Quit"),
+    }
 }
 
 /// Action display name for help text.
 pub fn action_label(action: Action) -> &'static str {
-    match action {
-        Action::Help => "Help",
-        Action::SaveSettings => "Save settings",
-        Action::ToggleQuickView => "Toggle quick view",
-        Action::Rename => "Rename",
-        Action::Copy => "Copy",
-        Action::Move => "Rename / Move",
-        Action::MkDir => "Make directory",
-        Action::Delete => "Delete",
-        Action::FocusMenu => "Focus menubar",
-        Action::Quit => "Quit",
-        Action::CursorUp => "Navigate up",
-        Action::CursorDown => "Navigate down",
-        Action::PageUp => "Page up",
-        Action::PageDown => "Page down",
-        Action::CursorHome => "First entry",
-        Action::CursorEnd => "Last entry",
-        Action::OpenOrEnter => "Open / enter directory",
-        Action::SwitchPanel => "Switch panel",
-        Action::ParentDir => "Parent directory",
-        Action::ToggleSelect => "Toggle selection",
-        Action::SelectGroup => "Select group",
-        Action::DeselectGroup => "Deselect group",
-        Action::InvertSelection => "Invert selection",
-        Action::SelectAll => "Select all",
-        Action::DeselectAll => "Deselect all",
-        Action::ToggleHidden => "Toggle hidden files",
-        Action::SortBy(SortBy::Name) => "Sort by name",
-        Action::SortBy(SortBy::Extension) => "Sort by extension",
-        Action::SortBy(SortBy::Modified) => "Sort by date",
-        Action::SortBy(SortBy::Size) => "Sort by size",
-        Action::ChooseSort => "Choose sort mode",
-        Action::Refresh => "Refresh panels",
-        Action::ChangeRoot => "Change root",
-        Action::DirHistory => "Directory history",
-        Action::CmdHistory => "Command history",
-        Action::LastOutput => "Last output",
-    }
+    action_meta(action).1
 }
 
 // ── Serialization helpers ─────────────────────────────────────────────────
 
 /// Stable string name for an action, used in settings files.
 pub fn action_str(action: Action) -> &'static str {
-    match action {
-        Action::CursorUp => "cursor_up",
-        Action::CursorDown => "cursor_down",
-        Action::PageUp => "page_up",
-        Action::PageDown => "page_down",
-        Action::CursorHome => "cursor_home",
-        Action::CursorEnd => "cursor_end",
-        Action::OpenOrEnter => "open_or_enter",
-        Action::ParentDir => "parent_dir",
-        Action::SwitchPanel => "switch_panel",
-        Action::ToggleSelect => "toggle_select",
-        Action::SelectGroup => "select_group",
-        Action::DeselectGroup => "deselect_group",
-        Action::InvertSelection => "invert_selection",
-        Action::SelectAll => "select_all",
-        Action::DeselectAll => "deselect_all",
-        Action::Copy => "copy",
-        Action::Move => "move",
-        Action::Rename => "rename",
-        Action::Delete => "delete",
-        Action::MkDir => "mkdir",
-        Action::ToggleQuickView => "toggle_quick_view",
-        Action::ToggleHidden => "toggle_hidden",
-        Action::SortBy(SortBy::Name) => "sort_by_name",
-        Action::SortBy(SortBy::Extension) => "sort_by_extension",
-        Action::SortBy(SortBy::Modified) => "sort_by_modified",
-        Action::SortBy(SortBy::Size) => "sort_by_size",
-        Action::ChooseSort => "choose_sort",
-        Action::Help => "help",
-        Action::SaveSettings => "save_settings",
-        Action::Refresh => "refresh",
-        Action::ChangeRoot => "change_root",
-        Action::DirHistory => "dir_history",
-        Action::CmdHistory => "cmd_history",
-        Action::FocusMenu => "focus_menu",
-        Action::Quit => "quit",
-        Action::LastOutput => "last_output",
-    }
+    action_meta(action).0
 }
 
 /// Parse an action name from a settings file. Returns `None` for unknown names.
+/// Inverse of [`action_str`], derived from it so the two cannot drift.
 pub fn parse_action(s: &str) -> Option<Action> {
-    Some(match s {
-        "cursor_up" => Action::CursorUp,
-        "cursor_down" => Action::CursorDown,
-        "page_up" => Action::PageUp,
-        "page_down" => Action::PageDown,
-        "cursor_home" => Action::CursorHome,
-        "cursor_end" => Action::CursorEnd,
-        "open_or_enter" => Action::OpenOrEnter,
-        "parent_dir" => Action::ParentDir,
-        "switch_panel" => Action::SwitchPanel,
-        "toggle_select" => Action::ToggleSelect,
-        "select_group" => Action::SelectGroup,
-        "deselect_group" => Action::DeselectGroup,
-        "invert_selection" => Action::InvertSelection,
-        "select_all" => Action::SelectAll,
-        "deselect_all" => Action::DeselectAll,
-        "copy" => Action::Copy,
-        "move" => Action::Move,
-        "rename" => Action::Rename,
-        "delete" => Action::Delete,
-        "mkdir" => Action::MkDir,
-        "toggle_quick_view" => Action::ToggleQuickView,
-        "toggle_hidden" => Action::ToggleHidden,
-        "sort_by_name" => Action::SortBy(SortBy::Name),
-        "sort_by_extension" => Action::SortBy(SortBy::Extension),
-        "sort_by_modified" => Action::SortBy(SortBy::Modified),
-        "sort_by_size" => Action::SortBy(SortBy::Size),
-        "choose_sort" => Action::ChooseSort,
-        "help" => Action::Help,
-        "save_settings" => Action::SaveSettings,
-        "refresh" => Action::Refresh,
-        "change_root" => Action::ChangeRoot,
-        "dir_history" => Action::DirHistory,
-        "cmd_history" => Action::CmdHistory,
-        "focus_menu" => Action::FocusMenu,
-        "quit" => Action::Quit,
-        "last_output" => Action::LastOutput,
-        _ => return None,
-    })
+    ALL_ACTIONS.iter().copied().find(|&a| action_str(a) == s)
 }
 
 /// Parse a human-readable key name (e.g. "Ctrl+F3", "F5", "Tab") into an InputKey.
@@ -518,62 +493,10 @@ pub fn parse_key_name(s: &str) -> Option<InputKey> {
         }
     }
 
-    let base = match remaining {
-        "F1" => vk::F1,
-        "F2" => vk::F2,
-        "F3" => vk::F3,
-        "F4" => vk::F4,
-        "F5" => vk::F5,
-        "F6" => vk::F6,
-        "F7" => vk::F7,
-        "F8" => vk::F8,
-        "F9" => vk::F9,
-        "F10" => vk::F10,
-        "F11" => vk::F11,
-        "F12" => vk::F12,
-        "Up" => vk::UP,
-        "Down" => vk::DOWN,
-        "Left" => vk::LEFT,
-        "Right" => vk::RIGHT,
-        "PgUp" => vk::PRIOR,
-        "PgDn" => vk::NEXT,
-        "Home" => vk::HOME,
-        "End" => vk::END,
-        "Enter" => vk::RETURN,
-        "Esc" => vk::ESCAPE,
-        "Tab" => vk::TAB,
-        "Backspace" => vk::BACK,
-        "Ins" => vk::INSERT,
-        "Delete" => vk::DELETE,
-        "Space" => vk::SPACE,
-        "A" => vk::A,
-        "B" => vk::B,
-        "C" => vk::C,
-        "D" => vk::D,
-        "E" => vk::E,
-        "F" => vk::F,
-        "G" => vk::G,
-        "H" => vk::H,
-        "I" => vk::I,
-        "J" => vk::J,
-        "K" => vk::K,
-        "L" => vk::L,
-        "M" => vk::M,
-        "N" => vk::N,
-        "O" => vk::O,
-        "P" => vk::P,
-        "Q" => vk::Q,
-        "R" => vk::R,
-        "S" => vk::S,
-        "T" => vk::T,
-        "U" => vk::U,
-        "V" => vk::V,
-        "W" => vk::W,
-        "X" => vk::X,
-        "Y" => vk::Y,
-        "Z" => vk::Z,
-        _ => return None,
-    };
+    let base = KEY_NAMES
+        .iter()
+        .find(|(_, name)| *name == remaining)
+        .map(|(k, _)| *k)?;
 
     Some(base | mods)
 }
@@ -594,7 +517,6 @@ pub fn build_help_text(bindings: &[Binding]) -> Vec<(String, &'static str, Actio
         Some(Action::Delete),
         Some(Action::FocusMenu),
         Some(Action::Quit),
-        Some(Action::LastOutput),
         None, // separator
         Some(Action::CursorUp),
         Some(Action::CursorDown),

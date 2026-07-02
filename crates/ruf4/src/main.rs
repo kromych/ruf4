@@ -73,10 +73,17 @@ fn run() -> std::io::Result<()> {
 
     loop {
         let scratch = scratch_arena(None);
+        // While a background job runs, poll often so the progress dialog stays live.
+        let job_timeout = if state.job_active() {
+            Duration::from_millis(50)
+        } else {
+            Duration::MAX
+        };
         let read_timeout = vt_parser
             .read_timeout()
             .min(tui.read_timeout())
-            .min(Duration::from_secs(1));
+            .min(Duration::from_secs(1))
+            .min(job_timeout);
 
         let input = match sys::read_stdin(&scratch, read_timeout) {
             Some(input) => input,
@@ -90,7 +97,7 @@ fn run() -> std::io::Result<()> {
             if state.handle_global_input(&ev) {
                 break;
             }
-            state.finalize_dialog();
+            state.poll_job();
 
             state.update_preview();
 
@@ -101,7 +108,10 @@ fn run() -> std::io::Result<()> {
             state.update_preview();
         }
 
+        // A timeout (empty read) is also our background-job heartbeat: pull the
+        // latest worker progress and repaint.
         if input.is_empty() {
+            state.poll_job();
             let mut ctx = tui.create_context(None);
             let r = draw::draw(&mut ctx, &mut state);
             state.apply_draw_result(r.term_size, r.menu_active);
@@ -115,6 +125,12 @@ fn run() -> std::io::Result<()> {
             let mut ctx = tui.create_context(None);
             let r = draw::draw(&mut ctx, &mut state);
             state.apply_draw_result(r.term_size, r.menu_active);
+        }
+
+        // After an external program took over the terminal, the incremental
+        // diff would draw nothing onto the freshly re-entered alternate screen.
+        if state.take_repaint_request() {
+            tui.request_full_redraw();
         }
 
         let scratch = scratch_arena(None);

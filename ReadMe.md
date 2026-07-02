@@ -115,7 +115,6 @@ If you are a developer, [here](./ReleaseFlow.md) are the gory details and notes 
 | F2 | Save settings |
 | F9 | Focus menubar |
 | F10 | Quit (with confirmation) |
-| F12 | Reopen last shell output |
 | Any letter | Activate command line |
 
 ### macOS alternatives
@@ -145,15 +144,10 @@ Commands run in the active panel's directory.
 | Escape | Cancel |
 | Backspace | Delete character |
 
-### Shell output
-
-After running a command, the output is shown in a scrollable dialog.
-Press F12 to reopen the last output at any time.
-
-| Key | Action |
-|-----|--------|
-| Ctrl+C | Copy output to clipboard |
-| Esc / Enter | Close |
+Commands run in the foreground with the terminal handed back to them, so
+interactive programs (a shell, `python`, `vim`, `less`) work normally. The
+panel display is restored when the command exits; press Enter at the prompt to
+return.
 
 ### Dialogs
 
@@ -170,7 +164,7 @@ Most confirmation dialogs respond to:
 - Click a panel to make it active
 - Click a file entry to select it
 - Double-click to enter a directory or open a file
-- Scroll wheel to navigate
+- Scroll wheel to navigate; over the quick view panel it scrolls the preview
 - Click the function key bar at the bottom for quick access
 
 ### Clicking around

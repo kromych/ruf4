@@ -229,6 +229,38 @@ impl Drop for Deinit {
     }
 }
 
+/// Restore the console modes present before [`switch_modes`], so an external
+/// program can run with normal line discipline. Pair with [`resume`].
+pub fn suspend() {
+    unsafe {
+        if STATE.stdin_mode_old != INVALID_CONSOLE_MODE {
+            Console::SetConsoleMode(STATE.stdin, STATE.stdin_mode_old);
+        }
+        if STATE.stdout_mode_old != INVALID_CONSOLE_MODE {
+            Console::SetConsoleMode(STATE.stdout, STATE.stdout_mode_old);
+        }
+    }
+}
+
+/// Re-enter raw/VT console modes after [`suspend`].
+pub fn resume() {
+    unsafe {
+        Console::SetConsoleMode(
+            STATE.stdin,
+            Console::ENABLE_WINDOW_INPUT
+                | Console::ENABLE_EXTENDED_FLAGS
+                | Console::ENABLE_VIRTUAL_TERMINAL_INPUT,
+        );
+        Console::SetConsoleMode(
+            STATE.stdout,
+            Console::ENABLE_PROCESSED_OUTPUT
+                | Console::ENABLE_WRAP_AT_EOL_OUTPUT
+                | Console::ENABLE_VIRTUAL_TERMINAL_PROCESSING
+                | Console::DISABLE_NEWLINE_AUTO_RETURN,
+        );
+    }
+}
+
 /// During startup we need to get the window size from the terminal.
 /// Because I didn't want to type a bunch of code, this function tells
 /// [`read_stdin`] to inject a fake sequence, which gets picked up by

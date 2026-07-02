@@ -8,6 +8,7 @@
 pub mod action;
 pub mod draw;
 pub mod fileops;
+pub mod job;
 pub mod lsh;
 pub mod panel;
 pub mod platform;

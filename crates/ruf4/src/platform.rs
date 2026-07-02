@@ -449,6 +449,56 @@ pub fn settings_path() -> Option<PathBuf> {
 
 // ── Shell commands ─────────────────────────────────────────────────────────
 
+/// Run an external command in the foreground with the terminal handed back to
+/// it, so interactive programs (a shell, `python`, `vim`, `less`) work normally.
+/// The TUI is suspended for the duration and restored afterwards.
+///
+/// stdin/stdout/stderr are inherited (not captured); a full-screen program owns
+/// the screen and its output scrolls the real terminal. After it exits we wait
+/// for the user to acknowledge so the output stays readable, then repaint.
+pub fn run_interactive(cmd: &str, cwd: &Path) -> Result<(), String> {
+    use ruf4_tui::sys;
+    use std::io::{BufRead, Write};
+
+    // Leave the TUI: reset cursor style, show cursor, reset attributes, disable
+    // mouse tracking, then leave the alternate screen (matches the startup guard).
+    sys::write_stdout("\x1b[0 q\x1b[?25h\x1b[m\x1b[?1003;1006l\x1b[?1049l");
+    sys::suspend();
+
+    #[cfg(windows)]
+    let status = Command::new("cmd.exe")
+        .arg("/C")
+        .arg(cmd)
+        .current_dir(cwd)
+        .status();
+    #[cfg(not(windows))]
+    let status = Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .current_dir(cwd)
+        .status();
+
+    let result = match status {
+        Ok(_) => Ok(()),
+        Err(e) => Err(format!("Failed to execute \"{cmd}\": {e}")),
+    };
+
+    // Keep the output on screen until acknowledged.
+    let mut out = std::io::stdout();
+    let _ = write!(out, "\n[Press Enter to return to ruf4] ");
+    let _ = out.flush();
+    let mut line = String::new();
+    let _ = std::io::stdin().lock().read_line(&mut line);
+
+    // Restore the TUI: raw mode, alternate screen, mouse tracking, then force a
+    // full repaint by injecting a window-size event.
+    sys::resume();
+    sys::write_stdout("\x1b[?1049h\x1b[?1003;1006h");
+    sys::inject_window_size_into_stdin();
+
+    result
+}
+
 pub fn run_command(cmd: &str, cwd: &Path) -> Result<(String, i32), String> {
     #[cfg(unix)]
     let output = Command::new("sh")

@@ -11,6 +11,7 @@ use ruf4_tui::input::{Input, InputKey, InputMouseState, kbmod, vk};
 
 use crate::action::{self, Action, Binding};
 use crate::fileops;
+use crate::job::{Decision, Job, JobKind};
 use crate::panel::{Panel, SortBy};
 use crate::platform;
 use crate::preview::{self, Preview};
@@ -83,11 +84,6 @@ pub enum Dialog {
         files: Vec<String>,
         dest: String,
     },
-    ShellOutput {
-        command: String,
-        output: String,
-        scroll: usize,
-    },
     ConfirmQuit {
         save_settings: bool,
     },
@@ -106,12 +102,21 @@ pub enum Dialog {
     },
     ConfirmOverwrite {
         target_name: String,
-        pending: Vec<(PathBuf, PathBuf)>,
-        errors: Vec<String>,
         is_copy: bool,
     },
     Rename {
         name: String,
+    },
+    /// Shown while a background [`Job`] runs. Fields mirror the worker's progress
+    /// and are refreshed every frame by [`State::poll_job`].
+    Progress {
+        title: &'static str,
+        current: String,
+        files_done: u64,
+        files_total: u64,
+        bytes_done: u64,
+        bytes_total: u64,
+        cancelling: bool,
     },
 }
 
@@ -138,8 +143,11 @@ pub struct State {
     pub bindings: Vec<Binding>,
     pub help_text: Vec<(String, &'static str, Action)>,
     pub theme: Theme,
-    pub last_output: Option<(String, String)>, // (command, output)
     last_click: Option<(Instant, Point)>,
+    /// The active background operation, if any.
+    pub job: Option<Job>,
+    /// Set after an external program returns, to force a full screen repaint.
+    repaint_requested: bool,
 }
 
 // ── Construction ────────────────────────────────────────────────────────────
@@ -182,8 +190,9 @@ impl State {
             bindings,
             help_text,
             theme,
-            last_output: None,
             last_click: None,
+            job: None,
+            repaint_requested: false,
         };
 
         if let Some(s) = settings::Settings::load() {
@@ -231,8 +240,9 @@ impl State {
             bindings,
             help_text,
             theme,
-            last_output: None,
             last_click: None,
+            job: None,
+            repaint_requested: false,
         }
     }
 
@@ -372,15 +382,6 @@ impl State {
             Action::ChangeRoot => self.open_choose_root(),
             Action::DirHistory => self.open_dir_history(),
             Action::CmdHistory => self.open_cmd_history(),
-            Action::LastOutput => {
-                if let Some((ref cmd, ref out)) = self.last_output {
-                    self.dialog = Dialog::ShellOutput {
-                        command: cmd.clone(),
-                        output: out.clone(),
-                        scroll: 0,
-                    };
-                }
-            }
             Action::FocusMenu => self.want_menu_focus = true,
             Action::Quit => {
                 self.dialog = Dialog::ConfirmQuit {
@@ -543,11 +544,7 @@ impl State {
     fn choose_root(&mut self, path: PathBuf) {
         self.dialog = Dialog::None;
         self.record_dir_change(&path);
-        let panel = self.active_panel_mut();
-        panel.path = path;
-        panel.cursor = 0;
-        panel.scroll_offset = 0;
-        panel.refresh();
+        self.active_panel_mut().navigate_to(path);
     }
 
     // ── Layout feedback from draw pass ──────────────────────────────────
@@ -582,10 +579,89 @@ impl State {
             return;
         }
         self.preview_path = current.clone();
+        self.preview_scroll = 0; // A new file starts at the top.
         self.preview = match current {
             Some(path) => preview::generate(&path),
             None => Preview::empty(),
         };
+    }
+
+    // ── Background jobs ──────────────────────────────────────────────────
+
+    pub fn job_active(&self) -> bool {
+        self.job.is_some()
+    }
+
+    /// Request a full screen repaint on the next frame (e.g. after an external
+    /// program returned the terminal).
+    pub fn request_repaint(&mut self) {
+        self.repaint_requested = true;
+    }
+
+    /// Consume a pending repaint request.
+    pub fn take_repaint_request(&mut self) -> bool {
+        std::mem::take(&mut self.repaint_requested)
+    }
+
+    /// Start a background operation and show its progress dialog.
+    pub fn start_job(&mut self, job: Job) {
+        self.dialog = Dialog::Progress {
+            title: job.kind.title(),
+            current: String::new(),
+            files_done: 0,
+            files_total: 0,
+            bytes_done: 0,
+            bytes_total: 0,
+            cancelling: false,
+        };
+        self.job = Some(job);
+    }
+
+    /// Poll the active job each frame: refresh the progress dialog, surface
+    /// overwrite prompts, and apply completion. No-op when no job runs.
+    pub fn poll_job(&mut self) {
+        let Some(job) = self.job.as_mut() else {
+            return;
+        };
+        let finished = job.poll();
+        let kind = job.kind;
+        let is_copy = job.is_copy();
+        let cancelling = job.cancelling;
+        let awaiting = job.awaiting_overwrite.clone();
+        let progress = job.progress.clone();
+
+        if let Some(errors) = finished {
+            self.job = None;
+            self.complete_job(kind, errors);
+            return;
+        }
+
+        if let Some(name) = awaiting {
+            // Reuse the overwrite dialog; the worker owns the remaining work.
+            if !matches!(self.dialog, Dialog::ConfirmOverwrite { .. }) {
+                self.dialog = Dialog::ConfirmOverwrite {
+                    target_name: name,
+                    is_copy,
+                };
+            }
+        } else {
+            self.dialog = Dialog::Progress {
+                title: kind.title(),
+                current: progress.current,
+                files_done: progress.files_done,
+                files_total: progress.files_total,
+                bytes_done: progress.bytes_done,
+                bytes_total: progress.bytes_total,
+                cancelling,
+            };
+        }
+    }
+
+    fn complete_job(&mut self, kind: JobKind, errors: Vec<String>) {
+        match kind {
+            JobKind::Delete => fileops::finish_operation(self, errors, true),
+            JobKind::Copy | JobKind::Move => fileops::finish_operation(self, errors, false),
+        }
     }
 
     // ── Query helpers ───────────────────────────────────────────────────
@@ -674,16 +750,32 @@ impl State {
             self.handle_mouse_click(mouse.position);
         } else if mouse.state == InputMouseState::Scroll {
             let panel_width = self.term_size.width / 2;
-            let panel = if mouse.position.x < panel_width {
-                &mut self.left
+            let on_left = mouse.position.x < panel_width;
+            // The quick view occupies the inactive side; scroll it there.
+            if self.quick_view && on_left == (self.active == ActivePanel::Right) {
+                self.scroll_preview(mouse.scroll.y);
             } else {
-                &mut self.right
-            };
-            if mouse.scroll.y < 0 {
-                panel.cursor_up(MOUSE_SCROLL);
-            } else if mouse.scroll.y > 0 {
-                panel.cursor_down(MOUSE_SCROLL);
+                let panel = if on_left {
+                    &mut self.left
+                } else {
+                    &mut self.right
+                };
+                if mouse.scroll.y < 0 {
+                    panel.cursor_up(MOUSE_SCROLL);
+                } else if mouse.scroll.y > 0 {
+                    panel.cursor_down(MOUSE_SCROLL);
+                }
             }
+        }
+    }
+
+    /// Scroll the quick view by a wheel delta. The result is clamped to the
+    /// content during the next draw (`apply_draw_result`).
+    fn scroll_preview(&mut self, delta: CoordType) {
+        if delta < 0 {
+            self.preview_scroll = self.preview_scroll.saturating_sub(MOUSE_SCROLL);
+        } else if delta > 0 {
+            self.preview_scroll = self.preview_scroll.saturating_add(MOUSE_SCROLL);
         }
     }
 
@@ -831,13 +923,17 @@ impl State {
 
     // ── Command line ────────────────────────────────────────────────────
 
+    fn command_field(&mut self) -> TextField<'_> {
+        TextField {
+            text: &mut self.command_line,
+            cursor: &mut self.cmd_cursor,
+        }
+    }
+
     fn handle_command_line_input(&mut self, ev: &Input) -> bool {
         match ev {
             Input::Text(text) => {
-                let cur = self.cmd_cursor;
-                let byte_pos = char_to_byte(&self.command_line, cur);
-                self.command_line.insert_str(byte_pos, text);
-                self.cmd_cursor = cur + text.chars().count();
+                self.command_field().insert(text);
                 true
             }
             Input::Keyboard(key) => {
@@ -853,42 +949,23 @@ impl State {
                     self.command_line_active = false;
                     self.cmd_cursor = 0;
                 } else if key == vk::BACK && self.cmd_cursor > 0 {
-                    let cur = self.cmd_cursor;
-                    let byte_pos = char_to_byte(&self.command_line, cur - 1);
-                    let next = self.command_line[byte_pos..]
-                        .char_indices()
-                        .nth(1)
-                        .map_or(self.command_line.len(), |(i, _)| byte_pos + i);
-                    self.command_line.drain(byte_pos..next);
-                    self.cmd_cursor = cur - 1;
+                    self.command_field().backspace();
                     if self.command_line.is_empty() {
                         self.command_line_active = false;
                     }
                 } else if key == vk::DELETE {
-                    let cur = self.cmd_cursor;
-                    let len = self.command_line.chars().count();
-                    if cur < len {
-                        let byte_pos = char_to_byte(&self.command_line, cur);
-                        let next = self.command_line[byte_pos..]
-                            .char_indices()
-                            .nth(1)
-                            .map_or(self.command_line.len(), |(i, _)| byte_pos + i);
-                        self.command_line.drain(byte_pos..next);
-                        if self.command_line.is_empty() {
-                            self.command_line_active = false;
-                        }
+                    self.command_field().delete();
+                    if self.command_line.is_empty() {
+                        self.command_line_active = false;
                     }
                 } else if key == vk::LEFT {
-                    self.cmd_cursor = self.cmd_cursor.saturating_sub(1);
+                    self.command_field().left();
                 } else if key == vk::RIGHT {
-                    let len = self.command_line.chars().count();
-                    if self.cmd_cursor < len {
-                        self.cmd_cursor += 1;
-                    }
+                    self.command_field().right();
                 } else if key == vk::HOME {
-                    self.cmd_cursor = 0;
+                    self.command_field().home();
                 } else if key == vk::END {
-                    self.cmd_cursor = self.command_line.chars().count();
+                    self.command_field().end();
                 } else {
                     // Tab, Up, Down, function keys -- let them fall through.
                     return false;
@@ -921,8 +998,17 @@ impl State {
                 self.handle_quit_dialog(ev, save);
             }
             Dialog::ConfirmOverwrite { .. } => self.handle_overwrite_dialog(ev),
-            Dialog::ShellOutput { .. } => self.handle_scrollable_dialog(ev),
             Dialog::ListSelect { .. } => self.handle_list_select_dialog(ev),
+            Dialog::Progress { .. } => self.handle_progress_dialog(ev),
+        }
+    }
+
+    /// Progress dialog: the only interaction is cancellation.
+    fn handle_progress_dialog(&mut self, ev: &Input) {
+        let cancel = matches!(ev, Input::Keyboard(key) if *key == vk::ESCAPE)
+            || matches!(ev, Input::Text("c" | "C"));
+        if cancel && let Some(j) = self.job.as_mut() {
+            j.cancel();
         }
     }
 
@@ -945,12 +1031,9 @@ impl State {
     fn handle_text_input_dialog(&mut self, ev: &Input) {
         match ev {
             Input::Text(text) => {
-                let cur = self.input_cursor;
-                if let Some(field) = self.dialog_text_field() {
-                    let byte_pos = char_to_byte(field, cur);
-                    field.insert_str(byte_pos, text);
+                if let Some(mut field) = self.dialog_field_mut() {
+                    field.insert(text);
                 }
-                self.input_cursor = cur + text.chars().count();
             }
             Input::Keyboard(key) => {
                 let key = *key;
@@ -958,58 +1041,37 @@ impl State {
                     self.dialog = Dialog::None;
                 } else if key == vk::RETURN {
                     self.commit_text_dialog();
-                } else if key == vk::BACK && self.input_cursor > 0 {
-                    let cur = self.input_cursor;
-                    if let Some(field) = self.dialog_text_field() {
-                        let byte_pos = char_to_byte(field, cur - 1);
-                        let next = field[byte_pos..]
-                            .char_indices()
-                            .nth(1)
-                            .map_or(field.len(), |(i, _)| byte_pos + i);
-                        field.drain(byte_pos..next);
+                } else if let Some(mut field) = self.dialog_field_mut() {
+                    if key == vk::BACK {
+                        field.backspace();
+                    } else if key == vk::DELETE {
+                        field.delete();
+                    } else if key == vk::LEFT {
+                        field.left();
+                    } else if key == vk::RIGHT {
+                        field.right();
+                    } else if key == vk::HOME {
+                        field.home();
+                    } else if key == vk::END {
+                        field.end();
                     }
-                    self.input_cursor = cur - 1;
-                } else if key == vk::DELETE {
-                    let cur = self.input_cursor;
-                    let len = self.dialog_text_field().map_or(0, |f| f.chars().count());
-                    if cur < len
-                        && let Some(field) = self.dialog_text_field()
-                    {
-                        let byte_pos = char_to_byte(field, cur);
-                        let next = field[byte_pos..]
-                            .char_indices()
-                            .nth(1)
-                            .map_or(field.len(), |(i, _)| byte_pos + i);
-                        field.drain(byte_pos..next);
-                    }
-                } else if key == vk::LEFT {
-                    self.input_cursor = self.input_cursor.saturating_sub(1);
-                } else if key == vk::RIGHT {
-                    let cur = self.input_cursor;
-                    let len = self.dialog_text_field().map_or(0, |f| f.chars().count());
-                    if cur < len {
-                        self.input_cursor = cur + 1;
-                    }
-                } else if key == vk::HOME {
-                    self.input_cursor = 0;
-                } else if key == vk::END {
-                    let len = self.dialog_text_field().map_or(0, |f| f.chars().count());
-                    self.input_cursor = len;
                 }
             }
             _ => {}
         }
     }
 
-    fn dialog_text_field(&mut self) -> Option<&mut String> {
-        match &mut self.dialog {
-            Dialog::MkDir { name } => Some(name),
-            Dialog::Rename { name } => Some(name),
-            Dialog::Copy { dest, .. } => Some(dest),
-            Dialog::Move { dest, .. } => Some(dest),
-            Dialog::SelectGroup { pattern, .. } => Some(pattern),
-            _ => None,
-        }
+    /// The active dialog's editable text field paired with the shared input
+    /// cursor, as a [`TextField`]. `None` for dialogs without a text field.
+    fn dialog_field_mut(&mut self) -> Option<TextField<'_>> {
+        let cursor = &mut self.input_cursor;
+        let text = match &mut self.dialog {
+            Dialog::MkDir { name } | Dialog::Rename { name } => name,
+            Dialog::Copy { dest, .. } | Dialog::Move { dest, .. } => dest,
+            Dialog::SelectGroup { pattern, .. } => pattern,
+            _ => return None,
+        };
+        Some(TextField { text, cursor })
     }
 
     /// Commit the text-input dialog based on its variant.
@@ -1081,97 +1143,20 @@ impl State {
         }
     }
 
+    /// The overwrite prompt only appears while a worker is blocked on a decision;
+    /// translate the key and hand it back to the job.
     fn handle_overwrite_dialog(&mut self, ev: &Input) {
-        enum OverwriteAction {
-            Yes,
-            No,
-            All,
-            Cancel,
-            None,
-        }
-        let action = match ev {
-            Input::Text("y" | "Y") => OverwriteAction::Yes,
-            Input::Text("n" | "N") => OverwriteAction::No,
-            Input::Text("a" | "A") => OverwriteAction::All,
-            Input::Keyboard(key) if *key == vk::RETURN => OverwriteAction::Yes,
-            Input::Keyboard(key) if *key == vk::ESCAPE => OverwriteAction::Cancel,
-            _ => OverwriteAction::None,
+        let decision = match ev {
+            Input::Text("y" | "Y") => Decision::Overwrite,
+            Input::Text("n" | "N") => Decision::Skip,
+            Input::Text("a" | "A") => Decision::OverwriteAll,
+            Input::Keyboard(key) if *key == vk::RETURN => Decision::Overwrite,
+            Input::Keyboard(key) if *key == vk::ESCAPE => Decision::Cancel,
+            _ => return,
         };
-
-        let Dialog::ConfirmOverwrite {
-            pending,
-            errors,
-            is_copy,
-            ..
-        } = &mut self.dialog
-        else {
-            return;
-        };
-
-        match action {
-            OverwriteAction::Yes => {
-                let is_copy = *is_copy;
-                let mut pending = std::mem::take(pending);
-                let mut errors = std::mem::take(errors);
-                if let Some((src, target)) = pending.first() {
-                    fileops::execute_file_op(src, target, is_copy, &mut errors);
-                }
-                pending.remove(0);
-                fileops::continue_copy_move(self, pending, errors, is_copy);
-            }
-            OverwriteAction::No => {
-                let is_copy = *is_copy;
-                let mut pending = std::mem::take(pending);
-                let errors = std::mem::take(errors);
-                pending.remove(0);
-                fileops::continue_copy_move(self, pending, errors, is_copy);
-            }
-            OverwriteAction::All => {
-                let is_copy = *is_copy;
-                let pending = std::mem::take(pending);
-                let mut errors = std::mem::take(errors);
-                for (src, target) in &pending {
-                    fileops::execute_file_op(src, target, is_copy, &mut errors);
-                }
-                fileops::finish_operation(self, errors, false);
-            }
-            OverwriteAction::Cancel => {
-                let errors = std::mem::take(errors);
-                fileops::finish_operation(self, errors, false);
-            }
-            OverwriteAction::None => {}
-        }
-    }
-
-    fn handle_scrollable_dialog(&mut self, ev: &Input) {
-        let Dialog::ShellOutput { scroll, output, .. } = &mut self.dialog else {
-            return;
-        };
-        match ev {
-            Input::Keyboard(key) => {
-                let key = *key;
-                if key == (kbmod::CTRL | vk::C) {
-                    platform::copy_to_clipboard(output);
-                    return;
-                }
-                if key == vk::ESCAPE || key == vk::RETURN || key == vk::SPACE {
-                    *scroll = usize::MAX; // signal dismiss (finalize_dialog cleans up)
-                } else if key == vk::UP {
-                    *scroll = scroll.saturating_sub(1);
-                } else if key == vk::DOWN {
-                    *scroll += 1;
-                } else if key == vk::PRIOR {
-                    *scroll = scroll.saturating_sub(PAGE_SCROLL);
-                } else if key == vk::NEXT {
-                    *scroll += PAGE_SCROLL;
-                } else if key == vk::HOME {
-                    *scroll = 0;
-                }
-            }
-            Input::Mouse(mouse) if mouse.state == InputMouseState::Left => {
-                *scroll = usize::MAX;
-            }
-            _ => {}
+        match self.job.as_mut() {
+            Some(j) => j.answer_overwrite(decision),
+            None => self.dialog = Dialog::None,
         }
     }
 
@@ -1237,11 +1222,7 @@ impl State {
             }
             ListSelectKind::DirHistory { entries } => {
                 if let Some(path) = entries.into_iter().nth(cursor) {
-                    let panel = self.active_panel_mut();
-                    panel.path = path;
-                    panel.cursor = 0;
-                    panel.scroll_offset = 0;
-                    panel.refresh();
+                    self.active_panel_mut().navigate_to(path);
                 }
             }
             ListSelectKind::CmdHistory { entries } => {
@@ -1325,30 +1306,72 @@ impl State {
     }
 }
 
-// After handle_dialog_input, clean up sentinel values.
-// ShellOutput uses usize::MAX as a "dismiss" signal because the handler
-// receives &mut scroll but cannot call self.dialog = Dialog::None.
-impl State {
-    /// Call after handle_dialog_input to finalize deferred state changes.
-    pub fn finalize_dialog(&mut self) {
-        if let Dialog::ShellOutput {
-            scroll,
-            command,
-            output,
-        } = &self.dialog
-            && *scroll == usize::MAX
-        {
-            self.last_output = Some((command.clone(), output.clone()));
-            self.dialog = Dialog::None;
-        }
-    }
-}
-
 // ── Shared helpers ─────────────────────────────────────────────────────────
 
 /// Convert a char index to a byte index in a string.
 fn char_to_byte(s: &str, char_idx: usize) -> usize {
     s.char_indices().nth(char_idx).map_or(s.len(), |(i, _)| i)
+}
+
+/// A single-line text editor over a borrowed string and char-index cursor.
+/// Shared by the command line and the text-input dialogs so the cursor
+/// arithmetic lives in one place.
+struct TextField<'a> {
+    text: &'a mut String,
+    cursor: &'a mut usize,
+}
+
+impl TextField<'_> {
+    fn len_chars(&self) -> usize {
+        self.text.chars().count()
+    }
+
+    fn insert(&mut self, s: &str) {
+        let byte_pos = char_to_byte(self.text, *self.cursor);
+        self.text.insert_str(byte_pos, s);
+        *self.cursor += s.chars().count();
+    }
+
+    /// Remove the character at the cursor (byte range of one char from `at`).
+    fn remove_char_at(&mut self, at: usize) {
+        let byte_pos = char_to_byte(self.text, at);
+        let next = self.text[byte_pos..]
+            .char_indices()
+            .nth(1)
+            .map_or(self.text.len(), |(i, _)| byte_pos + i);
+        self.text.drain(byte_pos..next);
+    }
+
+    fn backspace(&mut self) {
+        if *self.cursor > 0 {
+            *self.cursor -= 1;
+            self.remove_char_at(*self.cursor);
+        }
+    }
+
+    fn delete(&mut self) {
+        if *self.cursor < self.len_chars() {
+            self.remove_char_at(*self.cursor);
+        }
+    }
+
+    fn left(&mut self) {
+        *self.cursor = self.cursor.saturating_sub(1);
+    }
+
+    fn right(&mut self) {
+        if *self.cursor < self.len_chars() {
+            *self.cursor += 1;
+        }
+    }
+
+    fn home(&mut self) {
+        *self.cursor = 0;
+    }
+
+    fn end(&mut self) {
+        *self.cursor = self.len_chars();
+    }
 }
 
 fn push_recent<T: PartialEq>(list: &mut Vec<T>, item: T) {
