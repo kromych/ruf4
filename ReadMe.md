@@ -115,6 +115,7 @@ If you are a developer, [here](./ReleaseFlow.md) are the gory details and notes 
 | F2 | Save settings |
 | F9 | Focus menubar |
 | F10 | Quit (with confirmation) |
+| Ctrl+O | Show the user screen (the output of previously run commands); Ctrl+O or Esc returns |
 | Any letter | Activate command line |
 
 ### macOS alternatives
@@ -127,7 +128,7 @@ Mission Control, media, volume). These Ctrl shortcuts work without Fn:
 | Ctrl+S | Save settings (F2) |
 | Ctrl+Q | Toggle quick view (F3) |
 | Ctrl+P | Rename (F4) |
-| Ctrl+O | Copy (F5) |
+| Ctrl+C | Copy (F5) |
 | Ctrl+K | Move (F6) |
 | Ctrl+N | Make directory (F7) |
 | Ctrl+X | Delete (F8) |
@@ -147,7 +148,7 @@ Commands run in the active panel's directory.
 Commands run in the foreground with the terminal handed back to them, so
 interactive programs (a shell, `python`, `vim`, `less`) work normally. The
 panel display is restored when the command exits; press Enter at the prompt to
-return.
+return. Press Ctrl+O at any time to peek at that output again.
 
 ### Dialogs
 

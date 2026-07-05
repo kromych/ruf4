@@ -416,3 +416,30 @@ fn test_preview_scroll_resets_on_file_change() {
         "a new previewed file starts at the top"
     );
 }
+
+// --- User screen (Ctrl+O) ---
+
+#[test]
+fn test_ctrl_o_requests_user_screen() {
+    let mut s = test_state();
+    s.handle_global_input(&Input::Keyboard(kbmod::CTRL | vk::O));
+    assert!(s.take_user_screen_request());
+    // The request is consumed.
+    assert!(!s.take_user_screen_request());
+}
+
+#[test]
+fn test_user_screen_not_requested_while_dialog_open() {
+    let mut s = test_state();
+    s.dialog = Dialog::Help { scroll: 0 };
+    s.handle_global_input(&Input::Keyboard(kbmod::CTRL | vk::O));
+    assert!(!s.take_user_screen_request());
+}
+
+#[test]
+fn test_user_screen_exit_keys() {
+    let s = test_state();
+    let keys = s.user_screen_exit_keys();
+    assert!(keys.contains(&(kbmod::CTRL | vk::O)));
+    assert!(keys.contains(&vk::ESCAPE));
+}

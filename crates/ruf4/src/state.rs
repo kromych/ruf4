@@ -148,6 +148,8 @@ pub struct State {
     pub job: Option<Job>,
     /// Set after an external program returns, to force a full screen repaint.
     repaint_requested: bool,
+    /// Set by [`Action::ShowUserScreen`]; consumed by the main loop.
+    user_screen_requested: bool,
 }
 
 // ── Construction ────────────────────────────────────────────────────────────
@@ -193,6 +195,7 @@ impl State {
             last_click: None,
             job: None,
             repaint_requested: false,
+            user_screen_requested: false,
         };
 
         if let Some(s) = settings::Settings::load() {
@@ -243,6 +246,7 @@ impl State {
             last_click: None,
             job: None,
             repaint_requested: false,
+            user_screen_requested: false,
         }
     }
 
@@ -382,6 +386,9 @@ impl State {
             Action::ChangeRoot => self.open_choose_root(),
             Action::DirHistory => self.open_dir_history(),
             Action::CmdHistory => self.open_cmd_history(),
+            // The switch blocks on input, so it runs from the main loop at a
+            // frame boundary rather than from inside input/draw handling.
+            Action::ShowUserScreen => self.user_screen_requested = true,
             Action::FocusMenu => self.want_menu_focus = true,
             Action::Quit => {
                 self.dialog = Dialog::ConfirmQuit {
@@ -601,6 +608,26 @@ impl State {
     /// Consume a pending repaint request.
     pub fn take_repaint_request(&mut self) -> bool {
         std::mem::take(&mut self.repaint_requested)
+    }
+
+    /// Consume a pending user-screen request.
+    pub fn take_user_screen_request(&mut self) -> bool {
+        std::mem::take(&mut self.user_screen_requested)
+    }
+
+    /// Keys that end the user-screen view: every key bound to
+    /// [`Action::ShowUserScreen`], plus Escape.
+    pub fn user_screen_exit_keys(&self) -> Vec<InputKey> {
+        let mut keys: Vec<InputKey> = self
+            .bindings
+            .iter()
+            .filter(|b| b.action == Action::ShowUserScreen)
+            .map(|b| b.key)
+            .collect();
+        if !keys.contains(&vk::ESCAPE) {
+            keys.push(vk::ESCAPE);
+        }
+        keys
     }
 
     /// Start a background operation and show its progress dialog.

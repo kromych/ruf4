@@ -8,6 +8,7 @@
 use std::process::ExitCode;
 
 use ruf4::draw;
+use ruf4::platform;
 use ruf4::state;
 use ruf4_tui::helpers::*;
 use ruf4_tui::input;
@@ -26,18 +27,14 @@ struct TerminalGuard;
 
 impl TerminalGuard {
     fn new() -> Self {
-        // Alternate screen buffer, then enable SGR mouse mode + all-motion tracking.
-        sys::write_stdout("\x1b[?1049h\x1b[?1003;1006h");
+        sys::write_stdout(platform::TUI_ENTER_SEQ);
         Self
     }
 }
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        // Reset cursor style (DECSCUSR 0), show cursor (DECTCEM), reset attributes,
-        // disable mouse tracking, then exit alternate screen LAST so the main screen
-        // is restored cleanly without leftover SGR state.
-        sys::write_stdout("\x1b[0 q\x1b[?25h\x1b[m\x1b[?1003;1006l\x1b[?1049l");
+        sys::write_stdout(platform::TUI_LEAVE_SEQ);
     }
 }
 
@@ -56,7 +53,7 @@ fn run() -> std::io::Result<()> {
 
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        sys::write_stdout("\x1b[0 q\x1b[?25h\x1b[m\x1b[?1003;1006l\x1b[?1049l");
+        sys::write_stdout(platform::TUI_LEAVE_SEQ);
         default_hook(info);
     }));
 
@@ -136,6 +133,14 @@ fn run() -> std::io::Result<()> {
         let scratch = scratch_arena(None);
         let output = tui.render(&scratch);
         sys::write_stdout(&output);
+        drop(scratch);
+
+        // Ctrl+O: hand the screen back to the user until dismissed. Runs at the
+        // frame boundary so no draw pass is in flight while the TUI is left.
+        if state.take_user_screen_request() {
+            platform::view_user_screen(&state.user_screen_exit_keys());
+            tui.request_full_redraw();
+        }
     }
 
     Ok(())
