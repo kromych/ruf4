@@ -150,6 +150,25 @@ interactive programs (a shell, `python`, `vim`, `less`) work normally. The
 panel display is restored when the command exits; press Enter at the prompt to
 return. Press Ctrl+O at any time to peek at that output again.
 
+## SSH remote filesystems
+
+The change-root dialog (Ctrl+G) lists the hosts from `~/.ssh/config` as
+`ssh://host` roots next to the local drives. Panels can also be pointed at any
+`ssh://[user@]host[:port]/path` with the `cd` command. Remote directories
+browse, sort, quick-view, copy, move, rename, and delete like local ones;
+copies stream between hosts through ruf4 with byte progress. Enter on a remote
+file downloads it to a temporary directory and opens it; the command line runs
+commands on the remote host in the panel's directory over `ssh -t`.
+
+Transport is the OpenSSH client: `ruf4` spawns `ssh -s <host> sftp` and speaks
+SFTP over it, so keys, agents, jump hosts, and everything else in
+`~/.ssh/config` behave exactly like plain `ssh`. On the first use of a host a
+connection master is opened with the panels hidden so host-key and password
+prompts work; subsequent channels multiplex over its socket. Set
+`RUF4_SSH_CONFIG` to point `ssh` at an alternative client configuration file.
+On Windows, where OpenSSH lacks multiplexing, authentication must be
+non-interactive (keys or an agent).
+
 ### Dialogs
 
 Most confirmation dialogs respond to:

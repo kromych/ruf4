@@ -11,12 +11,13 @@ use ruf4_tui::input::{Input, InputKey, InputMouseState, kbmod, vk};
 
 use crate::action::{self, Action, Binding};
 use crate::fileops;
-use crate::job::{Decision, Job, JobKind};
+use crate::job::{self, Decision, Job, JobKind};
 use crate::panel::{Panel, SortBy};
 use crate::platform;
 use crate::preview::{self, Preview};
 use crate::settings;
 use crate::theme::Theme;
+use crate::vfs;
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -150,6 +151,8 @@ pub struct State {
     repaint_requested: bool,
     /// Set by [`Action::ShowUserScreen`]; consumed by the main loop.
     user_screen_requested: bool,
+    /// Local file to open when the running download job finishes.
+    pending_open: Option<PathBuf>,
 }
 
 // ── Construction ────────────────────────────────────────────────────────────
@@ -196,6 +199,7 @@ impl State {
             job: None,
             repaint_requested: false,
             user_screen_requested: false,
+            pending_open: None,
         };
 
         if let Some(s) = settings::Settings::load() {
@@ -247,6 +251,7 @@ impl State {
             job: None,
             repaint_requested: false,
             user_screen_requested: false,
+            pending_open: None,
         }
     }
 
@@ -296,7 +301,7 @@ impl State {
             Action::OpenOrEnter => self.open_or_enter(),
             Action::ParentDir => {
                 // Go up one directory (Backspace).
-                if self.active_panel().path.parent().is_some() {
+                if vfs::parent(&self.active_panel().path).is_some() {
                     self.active_panel_mut().cursor = 0; // ".." is always first
                     self.open_or_enter();
                 }
@@ -405,18 +410,54 @@ impl State {
     }
 
     pub fn open_or_enter(&mut self) {
-        if let Some(entry) = self.active_panel().current_entry() {
-            if entry.is_dir {
-                self.active_panel_mut().enter();
-                let path = self.active_panel().path.clone();
-                self.record_dir_change(&path);
-            } else {
-                let path = self.active_panel().path.join(&entry.name);
-                if let Err(msg) = platform::open_file(&path) {
-                    self.dialog = Dialog::Error { message: msg };
-                }
-            }
+        let Some(entry) = self.active_panel().current_entry() else {
+            return;
+        };
+        let is_dir = entry.is_dir;
+        let name = entry.name.clone();
+        if is_dir {
+            self.active_panel_mut().enter();
+            let path = self.active_panel().path.clone();
+            self.record_dir_change(&path);
+            return;
         }
+        let path = vfs::join(&self.active_panel().path, &name);
+        if vfs::is_remote(&path) {
+            // Remote files are downloaded to a temporary target first and
+            // opened when the job finishes.
+            self.download_and_open(path, &name);
+        } else if let Err(msg) = platform::open_file(&path) {
+            self.dialog = Dialog::Error { message: msg };
+        }
+    }
+
+    /// Download a remote file into the temporary directory and open it with
+    /// the system-associated application on completion.
+    pub fn download_and_open(&mut self, src: PathBuf, name: &str) {
+        let host_tag: String = src
+            .to_string_lossy()
+            .strip_prefix(vfs::SCHEME)
+            .unwrap_or_default()
+            .chars()
+            .take_while(|c| *c != '/')
+            .map(|c| {
+                if c.is_alphanumeric() || c == '.' || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let dir = std::env::temp_dir().join("ruf4-remote").join(host_tag);
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            self.dialog = Dialog::Error {
+                message: format!("Cannot create {}: {e}", dir.display()),
+            };
+            return;
+        }
+        let target = dir.join(name);
+        self.pending_open = Some(target.clone());
+        self.start_job(job::spawn_download(src, target));
     }
 
     pub fn record_dir_change(&mut self, path: &Path) {
@@ -473,7 +514,8 @@ impl State {
     }
 
     pub fn open_choose_root(&mut self) {
-        let roots = platform::discover_roots();
+        let mut roots = platform::discover_roots();
+        roots.extend(vfs::ssh_roots());
         if roots.is_empty() {
             return;
         }
@@ -550,8 +592,21 @@ impl State {
     /// keyboard Enter and mouse double-click to avoid duplication.
     fn choose_root(&mut self, path: PathBuf) {
         self.dialog = Dialog::None;
-        self.record_dir_change(&path);
-        self.active_panel_mut().navigate_to(path);
+        self.navigate_panel(path);
+    }
+
+    /// Navigate the active panel to `raw`, resolving it through the vfs first
+    /// (for remote paths this connects, prompting for authentication when
+    /// needed). Failures surface as an error dialog.
+    pub fn navigate_panel(&mut self, raw: PathBuf) {
+        match vfs::prepare_dir(&raw) {
+            Ok(dir) => {
+                self.record_dir_change(&dir);
+                self.active_panel_mut().navigate_to(dir);
+                self.request_repaint();
+            }
+            Err(message) => self.dialog = Dialog::Error { message },
+        }
     }
 
     // ── Layout feedback from draw pass ──────────────────────────────────
@@ -659,7 +714,7 @@ impl State {
 
         if let Some(errors) = finished {
             self.job = None;
-            self.complete_job(kind, errors);
+            self.complete_job(kind, errors, cancelling);
             return;
         }
 
@@ -684,10 +739,33 @@ impl State {
         }
     }
 
-    fn complete_job(&mut self, kind: JobKind, errors: Vec<String>) {
+    fn complete_job(&mut self, kind: JobKind, errors: Vec<String>, cancelled: bool) {
         match kind {
             JobKind::Delete => fileops::finish_operation(self, errors, true),
             JobKind::Copy | JobKind::Move => fileops::finish_operation(self, errors, false),
+            JobKind::Download => {
+                let target = self.pending_open.take();
+                if !errors.is_empty() {
+                    self.dialog = Dialog::Error {
+                        message: errors.join("\n"),
+                    };
+                    return;
+                }
+                self.dialog = Dialog::None;
+                if cancelled {
+                    // A cancelled transfer leaves a partial target; discard it
+                    // instead of opening it.
+                    if let Some(target) = target {
+                        let _ = std::fs::remove_file(&target);
+                    }
+                    return;
+                }
+                if let Some(target) = target
+                    && let Err(msg) = platform::open_file(&target)
+                {
+                    self.dialog = Dialog::Error { message: msg };
+                }
+            }
         }
     }
 
@@ -880,7 +958,7 @@ impl State {
         };
         let hidden_label = if panel.show_hidden { "[H]" } else { "[ ]" };
         let free = panel
-            .free_space()
+            .free_space
             .map(crate::panel::format_size)
             .unwrap_or_else(|| "N/A".to_string());
         let refreshed = &panel.last_refresh;
@@ -1249,7 +1327,7 @@ impl State {
             }
             ListSelectKind::DirHistory { entries } => {
                 if let Some(path) = entries.into_iter().nth(cursor) {
-                    self.active_panel_mut().navigate_to(path);
+                    self.navigate_panel(path);
                 }
             }
             ListSelectKind::CmdHistory { entries } => {

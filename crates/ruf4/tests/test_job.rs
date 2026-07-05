@@ -191,3 +191,21 @@ fn state_delete_flow_runs_and_refreshes() {
     );
     cleanup(&root);
 }
+
+#[test]
+fn download_copies_and_overwrites_silently() {
+    let root = temp_dir();
+    let src = root.join("src.txt");
+    let dst = root.join("dst.txt");
+    fs::write(&src, b"payload").unwrap();
+    // The target exists; a download must not raise an overwrite prompt.
+    fs::write(&dst, b"old").unwrap();
+
+    let mut job = job::spawn_download(src.clone(), dst.clone());
+    assert_eq!(job.kind.title(), "Downloading");
+    let errors = drive(&mut job, no_overwrite);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(fs::read(&dst).unwrap(), b"payload");
+    assert_eq!(fs::read(&src).unwrap(), b"payload");
+    cleanup(&root);
+}

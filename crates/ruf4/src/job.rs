@@ -16,7 +16,8 @@ use std::sync::mpsc::{Receiver, RecvError, Sender, channel};
 use std::thread::JoinHandle;
 
 use crate::fileops;
-use crate::platform;
+use crate::sftp;
+use crate::vfs;
 
 /// The operation a [`Job`] performs. Drives completion handling (which panels to
 /// refresh) and the progress-dialog title.
@@ -25,6 +26,8 @@ pub enum JobKind {
     Copy,
     Move,
     Delete,
+    /// Copy a remote file to a local temporary target, opened on completion.
+    Download,
 }
 
 impl JobKind {
@@ -33,6 +36,7 @@ impl JobKind {
             JobKind::Copy => "Copying",
             JobKind::Move => "Moving",
             JobKind::Delete => "Deleting",
+            JobKind::Download => "Downloading",
         }
     }
 }
@@ -135,7 +139,14 @@ pub fn spawn_copy_move(pairs: Vec<(PathBuf, PathBuf)>, is_copy: bool) -> Job {
         JobKind::Move
     };
     spawn(kind, move |tx, rx, cancel| {
-        run_copy_move(pairs, is_copy, &tx, &rx, &cancel)
+        run_copy_move(pairs, is_copy, false, &tx, &rx, &cancel)
+    })
+}
+
+/// Spawn a download of one file to a temporary target, overwriting silently.
+pub fn spawn_download(src: PathBuf, target: PathBuf) -> Job {
+    spawn(JobKind::Download, move |tx, rx, cancel| {
+        run_copy_move(vec![(src, target)], true, true, &tx, &rx, &cancel)
     })
 }
 
@@ -176,12 +187,13 @@ fn cancelled(cancel: &AtomicBool) -> bool {
 fn run_copy_move(
     pairs: Vec<(PathBuf, PathBuf)>,
     is_copy: bool,
+    mut overwrite_all: bool,
     tx: &Sender<JobEvent>,
     rx: &Receiver<Decision>,
     cancel: &AtomicBool,
 ) {
     // Pre-scan each pair so the gauge reflects total files and bytes.
-    let counts: Vec<(u64, u64)> = pairs.iter().map(|(src, _)| scan_tree(src)).collect();
+    let counts: Vec<(u64, u64)> = pairs.iter().map(|(src, _)| vfs::scan_tree(src)).collect();
     let mut prog = Progress {
         files_total: counts.iter().map(|c| c.0).sum(),
         bytes_total: counts.iter().map(|c| c.1).sum(),
@@ -189,7 +201,6 @@ fn run_copy_move(
     };
 
     let mut errors = Vec::new();
-    let mut overwrite_all = false;
 
     for (i, (src, target)) in pairs.iter().enumerate() {
         if cancelled(cancel) {
@@ -203,7 +214,7 @@ fn run_copy_move(
             continue;
         }
 
-        if target.exists() && !overwrite_all {
+        if !overwrite_all && vfs::exists(target) {
             let name = fileops::base_name(target).into_owned();
             let _ = tx.send(JobEvent::NeedOverwrite(name));
             match rx.recv() {
@@ -218,17 +229,28 @@ fn run_copy_move(
             }
         }
 
-        copy_move_one(src, target, is_copy, &mut prog, tx, cancel, &mut errors);
+        copy_move_one(
+            src,
+            target,
+            is_copy,
+            counts[i],
+            &mut prog,
+            tx,
+            cancel,
+            &mut errors,
+        );
     }
 
     let _ = tx.send(JobEvent::Finished { errors });
 }
 
 /// Execute one top-level (src, target) pair, reporting per-file progress.
+#[allow(clippy::too_many_arguments)]
 fn copy_move_one(
     src: &Path,
     target: &Path,
     is_copy: bool,
+    count: (u64, u64),
     prog: &mut Progress,
     tx: &Sender<JobEvent>,
     cancel: &AtomicBool,
@@ -242,41 +264,59 @@ fn copy_move_one(
         return;
     }
 
-    // Move: try a rename first; it is atomic and instant for same-filesystem moves.
-    match std::fs::rename(src, target) {
-        Ok(()) => {
-            prog.current = name;
-            prog.files_done += count_files(src).max(1);
-            let _ = tx.send(JobEvent::Progress(prog.clone()));
-        }
-        Err(e) if is_cross_device(&e) => {
-            // Fall back to copy + remove with progress.
-            if let Err(e) = copy_tree(src, target, prog, tx, cancel) {
+    // Move: try a rename first; it is atomic and instant within one
+    // filesystem domain.
+    if vfs::same_domain(src, target) {
+        match vfs::rename(src, target) {
+            Ok(()) => {
+                prog.current = name;
+                advance(prog, count);
+                let _ = tx.send(JobEvent::Progress(prog.clone()));
+                return;
+            }
+            // A local rename across devices falls back to copy + remove. A
+            // failed remote rename carries no distinguishable error code, so
+            // it falls back the same way; a real error resurfaces from the copy.
+            Err(e) if vfs::is_remote(src) || is_cross_device(&e) => {}
+            Err(e) => {
                 errors.push(format!("{name}: {e}"));
                 return;
             }
-            if cancelled(cancel) {
-                return;
-            }
-            let removed = if src.is_dir() {
-                std::fs::remove_dir_all(src)
-            } else {
-                std::fs::remove_file(src)
-            };
-            if let Err(e) = removed {
-                errors.push(format!("{name}: {e}"));
-            }
         }
-        Err(e) => errors.push(format!("{name}: {e}")),
+    }
+
+    // Copy + remove: across domains, or a same-domain rename fell through.
+    if let Err(e) = copy_tree(src, target, prog, tx, cancel) {
+        errors.push(format!("{name}: {e}"));
+        return;
+    }
+    if cancelled(cancel) {
+        return;
+    }
+    if let Err(e) = vfs::remove_tree(src) {
+        errors.push(format!("{name}: {e}"));
     }
 }
 
-/// Recursively copy `src` to `dst`, reporting progress and honouring cancellation.
-/// Mirrors `fileops::copy_dir_recursive` but per file, so a large copy stays
-/// cancellable and the gauge advances smoothly.
+/// Recursively copy `src` to `dst`, reporting progress and honouring
+/// cancellation. Mirrors `fileops::copy_dir_recursive` but per file, so a
+/// large copy stays cancellable and the gauge advances smoothly. Either side
+/// may be remote; remote-to-remote copies stream through this host.
 fn copy_tree(
     src: &Path,
     dst: &Path,
+    prog: &mut Progress,
+    tx: &Sender<JobEvent>,
+    cancel: &AtomicBool,
+) -> std::io::Result<()> {
+    let meta = vfs::symlink_meta(src)?;
+    copy_tree_inner(src, dst, meta, prog, tx, cancel)
+}
+
+fn copy_tree_inner(
+    src: &Path,
+    dst: &Path,
+    meta: vfs::Meta,
     prog: &mut Progress,
     tx: &Sender<JobEvent>,
     cancel: &AtomicBool,
@@ -285,44 +325,81 @@ fn copy_tree(
         return Ok(());
     }
 
-    let meta = std::fs::symlink_metadata(src)?;
-    if meta.file_type().is_symlink() {
-        platform::copy_symlink(src, dst)?;
-        bump(prog, src, 0, tx);
-        return Ok(());
-    }
-
-    if meta.is_dir() {
-        // Guard against copying a directory into itself.
-        if let Ok(cs) = std::fs::canonicalize(src)
-            && let Ok(cd) = std::fs::canonicalize(dst)
-            && cd.starts_with(&cs)
-        {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "cannot copy directory into itself",
-            ));
+    match meta.kind {
+        vfs::Kind::Symlink => {
+            vfs::copy_symlink(src, dst)?;
+            bump(prog, src, 0, tx);
         }
-        std::fs::create_dir_all(dst)?;
-        for entry in std::fs::read_dir(src)? {
-            if cancelled(cancel) {
-                return Ok(());
+        vfs::Kind::Dir => {
+            if vfs::dir_contains(src, dst) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "cannot copy directory into itself",
+                ));
             }
-            let entry = entry?;
-            copy_tree(
-                &entry.path(),
-                &dst.join(entry.file_name()),
-                prog,
-                tx,
-                cancel,
-            )?;
+            vfs::create_dir_all(dst)?;
+            for (child, child_meta) in vfs::read_dir_meta(src)? {
+                if cancelled(cancel) {
+                    return Ok(());
+                }
+                copy_tree_inner(
+                    &vfs::join(src, &child),
+                    &vfs::join(dst, &child),
+                    child_meta,
+                    prog,
+                    tx,
+                    cancel,
+                )?;
+            }
         }
-        return Ok(());
+        vfs::Kind::File => {
+            if !vfs::is_remote(src) && !vfs::is_remote(dst) {
+                std::fs::copy(src, dst)?;
+                bump(prog, src, meta.size, tx);
+            } else {
+                prog.current = fileops::base_name(src).into_owned();
+                let _ = tx.send(JobEvent::Progress(prog.clone()));
+                copy_file_stream(src, dst, prog, tx, cancel)?;
+                bump(prog, src, 0, tx);
+            }
+        }
     }
-
-    std::fs::copy(src, dst)?;
-    bump(prog, src, meta.len(), tx);
     Ok(())
+}
+
+/// Report streamed progress every this many chunks (chunks are
+/// [`sftp::MAX_DATA`] bytes, so this is roughly once per mebibyte).
+const STREAM_PROGRESS_INTERVAL: u64 = 32;
+
+/// Copy one file through read/write streams, advancing the byte gauge as
+/// chunks complete. Cancellation leaves a partial target, like the local path.
+fn copy_file_stream(
+    src: &Path,
+    dst: &Path,
+    prog: &mut Progress,
+    tx: &Sender<JobEvent>,
+    cancel: &AtomicBool,
+) -> std::io::Result<()> {
+    let mut reader = vfs::open_read(src)?;
+    let mut writer = vfs::open_write(dst)?;
+    let mut buf = vec![0u8; sftp::MAX_DATA];
+    let mut chunks = 0u64;
+    loop {
+        if cancelled(cancel) {
+            return Ok(());
+        }
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        writer.write_all(&buf[..n])?;
+        prog.bytes_done += n as u64;
+        chunks += 1;
+        if chunks.is_multiple_of(STREAM_PROGRESS_INTERVAL) {
+            let _ = tx.send(JobEvent::Progress(prog.clone()));
+        }
+    }
+    writer.flush()
 }
 
 fn run_delete(paths: Vec<PathBuf>, tx: &Sender<JobEvent>, cancel: &AtomicBool) {
@@ -360,34 +437,8 @@ fn advance(prog: &mut Progress, count: (u64, u64)) {
     prog.bytes_done += count.1;
 }
 
-/// Count files and total bytes under `path` (the path itself counts as one entry
-/// when it is a file or symlink).
-fn scan_tree(path: &Path) -> (u64, u64) {
-    let meta = match std::fs::symlink_metadata(path) {
-        Ok(m) => m,
-        Err(_) => return (1, 0),
-    };
-    if meta.file_type().is_symlink() {
-        return (1, 0);
-    }
-    if meta.is_dir() {
-        let mut files = 0;
-        let mut bytes = 0;
-        if let Ok(rd) = std::fs::read_dir(path) {
-            for entry in rd.flatten() {
-                let (f, b) = scan_tree(&entry.path());
-                files += f;
-                bytes += b;
-            }
-        }
-        (files, bytes)
-    } else {
-        (1, meta.len())
-    }
-}
-
 fn count_files(path: &Path) -> u64 {
-    scan_tree(path).0
+    vfs::scan_tree(path).0
 }
 
 fn is_cross_device(e: &std::io::Error) -> bool {

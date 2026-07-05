@@ -562,7 +562,7 @@ fn draw_single_panel(
 
             let (sel_count, sel_size) = panel.selection_info();
             let free = panel
-                .free_space()
+                .free_space
                 .map(panel::format_size)
                 .unwrap_or_else(|| "N/A".to_string());
 

@@ -443,3 +443,30 @@ fn test_user_screen_exit_keys() {
     assert!(keys.contains(&(kbmod::CTRL | vk::O)));
     assert!(keys.contains(&vk::ESCAPE));
 }
+
+// --- Download completion ---
+
+#[test]
+fn test_cancelled_download_is_discarded_not_opened() {
+    let root = std::env::temp_dir().join(format!("ruf4_state_dl_{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let src = root.join("payload.bin");
+    std::fs::write(&src, vec![7u8; 256 * 1024]).unwrap();
+
+    let mut s = test_state();
+    s.download_and_open(src.clone(), "payload.bin");
+    assert!(s.job.is_some());
+    let target = std::env::temp_dir().join("ruf4-remote").join("payload.bin");
+
+    // Cancel from the UI side; whether the worker already finished the copy
+    // must not matter for the outcome.
+    s.job.as_mut().unwrap().cancel();
+    while s.job.is_some() {
+        s.poll_job();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+
+    assert!(matches!(s.dialog, Dialog::None));
+    assert!(!target.exists(), "partial download must be removed");
+    let _ = std::fs::remove_dir_all(&root);
+}

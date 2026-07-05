@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use crate::platform;
 use crate::state::{Dialog, State};
+use crate::vfs;
 
 /// The final path component as a lossy string, or empty if there is none.
 pub fn base_name(path: &Path) -> Cow<'_, str> {
@@ -28,25 +29,13 @@ pub fn same_file_error(name: &str, is_copy: bool) -> String {
 }
 
 pub fn ops_mkdir(path: &Path) -> Result<(), String> {
-    fs::create_dir_all(path).map_err(|e| format!("Cannot create \"{}\": {e}", path.display()))
+    vfs::create_dir_all(path).map_err(|e| format!("Cannot create \"{}\": {e}", path.display()))
 }
 
 pub fn ops_delete(paths: &[PathBuf]) -> Vec<String> {
     let mut errors = Vec::new();
     for path in paths {
-        let is_symlink = fs::symlink_metadata(path)
-            .map(|m| m.file_type().is_symlink())
-            .unwrap_or(false);
-        // Symlinks are always removed as links, never following the target.
-        // On Windows, directory symlinks need remove_dir; file symlinks need remove_file.
-        let result = if is_symlink {
-            platform::remove_symlink(path)
-        } else if path.is_dir() {
-            fs::remove_dir_all(path)
-        } else {
-            fs::remove_file(path)
-        };
-        if let Err(e) = result {
+        if let Err(e) = vfs::remove_tree(path) {
             errors.push(format!(
                 "{}: {e}",
                 path.file_name().unwrap_or_default().to_string_lossy()
@@ -58,16 +47,15 @@ pub fn ops_delete(paths: &[PathBuf]) -> Vec<String> {
 
 pub fn ops_build_pairs(sources: &[PathBuf], dest: &str) -> Vec<(PathBuf, PathBuf)> {
     let dest_path = PathBuf::from(dest);
+    let dest_is_dir = vfs::is_dir(&dest_path);
     let mut pairs = Vec::new();
 
     for src in sources {
-        let file_name = src.file_name().unwrap_or_default();
-        let target = if dest_path.is_dir() {
-            dest_path.join(file_name)
-        } else if sources.len() == 1 {
-            dest_path.clone()
+        let file_name = src.file_name().unwrap_or_default().to_string_lossy();
+        let target = if dest_is_dir || sources.len() > 1 {
+            vfs::join(&dest_path, &file_name)
         } else {
-            dest_path.join(file_name)
+            dest_path.clone()
         };
         pairs.push((src.clone(), target));
     }
@@ -146,15 +134,12 @@ pub fn ops_execute_all(pairs: &[(PathBuf, PathBuf)], is_copy: bool) -> Vec<Strin
 }
 
 pub fn same_file(a: &Path, b: &Path) -> bool {
-    match (fs::canonicalize(a), fs::canonicalize(b)) {
-        (Ok(ca), Ok(cb)) => ca == cb,
-        _ => false,
-    }
+    vfs::same_file(a, b)
 }
 
 /// Resolve `path` to an absolute form even if it doesn't exist yet:
 /// canonicalize the longest existing prefix, then append the rest.
-fn normalize_against_existing(path: &Path) -> std::io::Result<PathBuf> {
+pub(crate) fn normalize_against_existing(path: &Path) -> std::io::Result<PathBuf> {
     if let Ok(p) = fs::canonicalize(path) {
         return Ok(p);
     }
@@ -220,7 +205,7 @@ pub fn do_mkdir(state: &mut State, name: &str) {
         state.dialog = Dialog::None;
         return;
     }
-    let path = state.active_panel().path.join(name);
+    let path = vfs::join(&state.active_panel().path, name);
     match ops_mkdir(&path) {
         Ok(()) => {
             state.dialog = Dialog::None;
@@ -242,23 +227,27 @@ pub fn do_delete(state: &mut State) {
 }
 
 pub fn do_copy(state: &mut State, dest: &str) {
-    let sources = state.active_panel().selected_or_current();
-    let pairs = ops_build_pairs(&sources, dest);
-    if pairs.is_empty() {
-        state.dialog = Dialog::None;
-        return;
-    }
-    state.start_job(crate::job::spawn_copy_move(pairs, true));
+    do_copy_move(state, dest, true);
 }
 
 pub fn do_move(state: &mut State, dest: &str) {
+    do_copy_move(state, dest, false);
+}
+
+fn do_copy_move(state: &mut State, dest: &str, is_copy: bool) {
+    // Connect a remote destination now: the worker cannot prompt for
+    // authentication.
+    if let Err(message) = vfs::ensure_host(Path::new(dest)) {
+        state.dialog = Dialog::Error { message };
+        return;
+    }
     let sources = state.active_panel().selected_or_current();
     let pairs = ops_build_pairs(&sources, dest);
     if pairs.is_empty() {
         state.dialog = Dialog::None;
         return;
     }
-    state.start_job(crate::job::spawn_copy_move(pairs, false));
+    state.start_job(crate::job::spawn_copy_move(pairs, is_copy));
 }
 
 pub fn do_rename(state: &mut State, new_name: &str) {
@@ -267,9 +256,9 @@ pub fn do_rename(state: &mut State, new_name: &str) {
         return;
     }
     let panel = state.active_panel();
-    let old_path = panel.path.join(&panel.entries[panel.cursor].name);
-    let new_path = panel.path.join(new_name);
-    match fs::rename(&old_path, &new_path) {
+    let old_path = vfs::join(&panel.path, &panel.entries[panel.cursor].name);
+    let new_path = vfs::join(&panel.path, new_name);
+    match vfs::rename(&old_path, &new_path) {
         Ok(()) => {
             state.dialog = Dialog::None;
             state.active_panel_mut().refresh();
@@ -289,36 +278,55 @@ pub fn execute_command(state: &mut State) {
 
     // Intercept "cd" to change the active panel's directory.
     if let Some(target) = parse_cd_command(&cmd) {
-        let raw = if target.is_empty() || target == "~" {
-            platform::home_dir()
-        } else {
-            let p = PathBuf::from(&target);
-            if p.is_absolute() { p } else { cwd.join(p) }
-        };
-        let dest = fs::canonicalize(&raw).unwrap_or(raw);
-        if dest.is_dir() {
-            state.record_dir_change(&dest);
-            state.active_panel_mut().navigate_to(dest);
-        } else {
-            state.dialog = Dialog::Error {
-                message: format!("cd: not a directory: {}", dest.display()),
-            };
-        }
         state.command_line.clear();
+        let raw = resolve_cd_target(&cwd, &target);
+        state.navigate_panel(raw);
         return;
     }
 
     state.command_line.clear();
 
     // External commands run in the foreground with the terminal handed back to
-    // them, so interactive programs work. The TUI is suspended and restored by
-    // `run_interactive`; the screen must be fully repainted afterwards.
-    if let Err(msg) = platform::run_interactive(&cmd, &cwd) {
+    // them, so interactive programs work. The TUI is suspended and restored for
+    // the duration; the screen must be fully repainted afterwards. With a
+    // remote working directory the command runs on that host over ssh.
+    let result = match vfs::parse_remote(&cwd) {
+        Some(remote) => vfs::run_remote_interactive(&remote, &cmd),
+        None => platform::run_interactive(&cmd, &cwd),
+    };
+    if let Err(msg) = result {
         state.dialog = Dialog::Error { message: msg };
     }
     state.request_repaint();
     state.left.refresh();
     state.right.refresh();
+}
+
+/// Resolve a `cd` argument against the panel's working directory. An empty
+/// target and `~` go to the home directory (the remote login home when the
+/// panel is on a remote host); `ssh://` targets switch hosts.
+pub fn resolve_cd_target(cwd: &Path, target: &str) -> PathBuf {
+    if vfs::is_url(target) {
+        return PathBuf::from(target);
+    }
+    match vfs::parse_remote(cwd) {
+        Some(remote) => {
+            if target.is_empty() || target == "~" {
+                // No path component resolves to the remote home directory.
+                PathBuf::from(remote.host.display())
+            } else {
+                vfs::join(cwd, target)
+            }
+        }
+        None => {
+            if target.is_empty() || target == "~" {
+                platform::home_dir()
+            } else {
+                let p = PathBuf::from(target);
+                if p.is_absolute() { p } else { cwd.join(p) }
+            }
+        }
+    }
 }
 
 fn parse_cd_command(cmd: &str) -> Option<String> {
