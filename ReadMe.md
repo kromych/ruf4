@@ -22,7 +22,7 @@ This is built in Rust on the TUI framework derived from
 very small and just enough.
 
 Runs on Linux, macOS, and Windows. You can download the latest pre-release
-[0.0.2](https://github.com/kromych/ruf4/releases/tag/v0.0.2).
+[0.0.8](https://github.com/kromych/ruf4/releases/tag/v0.0.8).
 
 If you are a developer, [here](./ReleaseFlow.md) are the gory details and notes on builds/releases.
 ## Screenshots
@@ -115,6 +115,7 @@ If you are a developer, [here](./ReleaseFlow.md) are the gory details and notes 
 | F2 | Save settings |
 | F9 | Focus menubar |
 | F10 | Quit (with confirmation) |
+| Ctrl+O | Show the user screen (the output of previously run commands); Ctrl+O or Esc returns |
 | Any letter | Activate command line |
 
 ### macOS alternatives
@@ -127,7 +128,7 @@ Mission Control, media, volume). These Ctrl shortcuts work without Fn:
 | Ctrl+S | Save settings (F2) |
 | Ctrl+Q | Toggle quick view (F3) |
 | Ctrl+P | Rename (F4) |
-| Ctrl+O | Copy (F5) |
+| Ctrl+C | Copy (F5) |
 | Ctrl+K | Move (F6) |
 | Ctrl+N | Make directory (F7) |
 | Ctrl+X | Delete (F8) |
@@ -147,7 +148,45 @@ Commands run in the active panel's directory.
 Commands run in the foreground with the terminal handed back to them, so
 interactive programs (a shell, `python`, `vim`, `less`) work normally. The
 panel display is restored when the command exits; press Enter at the prompt to
-return.
+return. Press Ctrl+O at any time to peek at that output again.
+
+## SSH remote filesystems
+
+The change-root dialog (Ctrl+G) lists the hosts from `~/.ssh/config` as
+`ssh://host` roots next to the local drives. Panels can also be pointed at any
+`ssh://[user@]host[:port]/path` with the `cd` command. Remote directories
+browse, sort, quick-view, copy, move, rename, and delete like local ones;
+copies stream between hosts through ruf4 with byte progress. Enter on a remote
+file downloads it to a temporary directory and opens it; the command line runs
+commands on the remote host in the panel's directory over `ssh -t`.
+
+Transport is the OpenSSH client: `ruf4` spawns `ssh -s <host> sftp` and speaks
+SFTP over it, so keys, agents, jump hosts, and everything else in
+`~/.ssh/config` behave exactly like plain `ssh`. On the first use of a host a
+connection master is opened with the panels hidden so host-key and password
+prompts work; subsequent channels multiplex over its socket. Set
+`RUF4_SSH_CONFIG` to point `ssh` at an alternative client configuration file.
+On Windows, where OpenSSH lacks multiplexing, authentication must be
+non-interactive (keys or an agent).
+
+## SMB shares
+
+`cd smb://[user@]host/share/path` opens an SMB share using the operating
+system's native client, so after navigation the panel works on an ordinary
+local directory:
+
+- **Windows**: the URL is rewritten to a UNC path (`\\host\share\path`); UNC
+  paths can also be entered directly.
+- **macOS**: the share is mounted with `mount_smbfs` under `~/.ruf4/mnt`,
+  prompting for the password with the panels hidden. Unmounted shares
+  remount automatically when revisited through the directory history.
+- **Linux**: the share is mounted in user space with `gio mount` (GVFS,
+  present on desktop distributions) and appears under the session's `gvfs`
+  directory.
+
+Mounted shares are listed in the change-root dialog (Ctrl+G) next to the
+local drives. Shares stay mounted when ruf4 exits; unmount with the usual
+system tools (`umount`, `gio mount -u`, Finder).
 
 ### Dialogs
 

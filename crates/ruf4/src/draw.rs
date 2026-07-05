@@ -139,6 +139,9 @@ fn draw_menubar(ctx: &mut Context, state: &mut State) -> bool {
             ) {
                 state.execute_action(Action::ToggleQuickView);
             }
+            if ctx.menubar_menu_button("User screen", 'U', key(Action::ShowUserScreen)) {
+                state.execute_action(Action::ShowUserScreen);
+            }
 
             // Sort modes
             let sort = state.active_panel().sort_by;
@@ -559,7 +562,7 @@ fn draw_single_panel(
 
             let (sel_count, sel_size) = panel.selection_info();
             let free = panel
-                .free_space()
+                .free_space
                 .map(panel::format_size)
                 .unwrap_or_else(|| "N/A".to_string());
 

@@ -3,11 +3,10 @@
 
 //! File preview for the quick-view panel.
 
-use std::fs;
-use std::io::Read;
 use std::path::Path;
 
 use crate::lsh::{self, HighlightKind};
+use crate::vfs;
 
 const MAX_PREVIEW_BYTES: usize = 64 * 1024;
 const BINARY_CHECK_BYTES: usize = 512;
@@ -45,12 +44,13 @@ pub fn generate(path: &Path) -> Preview {
         .to_string_lossy()
         .into_owned();
 
-    if path.is_dir() {
+    if vfs::is_dir(path) {
         return dir_preview(path, &name);
     }
 
-    let meta = match fs::metadata(path) {
-        Ok(m) => m,
+    // TODO: remote previews block the UI thread for the duration of the read.
+    let (buf, file_size) = match vfs::read_prefix(path, MAX_PREVIEW_BYTES) {
+        Ok(v) => v,
         Err(e) => {
             return Preview {
                 lines: vec![format!("Error: {e}")],
@@ -62,37 +62,7 @@ pub fn generate(path: &Path) -> Preview {
         }
     };
 
-    let file_size = meta.len();
-
-    let mut file = match fs::File::open(path) {
-        Ok(f) => f,
-        Err(e) => {
-            return Preview {
-                lines: vec![format!("Error: {e}")],
-                highlights: Vec::new(),
-                is_binary: false,
-                file_size,
-                title: name,
-            };
-        }
-    };
-
-    let mut buf = vec![0u8; MAX_PREVIEW_BYTES.min(file_size as usize)];
-    let n = match file.read(&mut buf) {
-        Ok(n) => n,
-        Err(e) => {
-            return Preview {
-                lines: vec![format!("Error reading: {e}")],
-                highlights: Vec::new(),
-                is_binary: false,
-                file_size,
-                title: name,
-            };
-        }
-    };
-    buf.truncate(n);
-
-    let check_len = n.min(BINARY_CHECK_BYTES);
+    let check_len = buf.len().min(BINARY_CHECK_BYTES);
     let is_binary = buf[..check_len].contains(&0);
 
     if is_binary {
@@ -181,15 +151,11 @@ fn dir_preview(path: &Path, name: &str) -> Preview {
     lines.push(format!("Directory: {name}"));
     lines.push(String::new());
 
-    match fs::read_dir(path) {
+    match vfs::list_names(path) {
         Ok(entries) => {
             let mut items: Vec<String> = entries
-                .flatten()
-                .map(|e| {
-                    let fname = e.file_name().to_string_lossy().into_owned();
-                    let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
-                    if is_dir { format!("{fname}/") } else { fname }
-                })
+                .into_iter()
+                .map(|(fname, is_dir)| if is_dir { format!("{fname}/") } else { fname })
                 .collect();
             items.sort();
             let total = items.len();

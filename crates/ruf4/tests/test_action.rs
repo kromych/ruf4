@@ -9,8 +9,8 @@
 use std::collections::HashSet;
 
 use ruf4::action::{
-    ALL_ACTIONS, action_label, action_str, default_bindings, key_display_name, parse_action,
-    parse_key_name,
+    ALL_ACTIONS, Action, action_label, action_str, build_help_text, default_bindings,
+    key_display_name, lookup, parse_action, parse_key_name,
 };
 use ruf4_tui::input::{kbmod, vk};
 
@@ -122,4 +122,29 @@ fn key_names_round_trip_with_modifiers() {
 fn unknown_key_name_is_rejected() {
     assert!(parse_key_name("Nope").is_none());
     assert!(parse_key_name("Ctrl+Nope").is_none());
+}
+
+#[test]
+fn ctrl_o_is_bound_to_show_user_screen_on_all_platforms() {
+    let bindings = default_bindings();
+    assert_eq!(
+        lookup(&bindings, kbmod::CTRL | vk::O),
+        Some(Action::ShowUserScreen)
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_copy_alternative_is_ctrl_c() {
+    let bindings = default_bindings();
+    assert_eq!(lookup(&bindings, kbmod::CTRL | vk::C), Some(Action::Copy));
+}
+
+#[test]
+fn help_lists_show_user_screen_with_its_key() {
+    let bindings = default_bindings();
+    let help = build_help_text(&bindings);
+    assert!(help.iter().any(|(keys, label, _)| {
+        *label == action_label(Action::ShowUserScreen) && keys.contains("Ctrl+O")
+    }));
 }

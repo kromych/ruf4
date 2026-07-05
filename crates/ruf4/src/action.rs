@@ -54,6 +54,7 @@ pub enum Action {
     ChangeRoot,
     DirHistory,
     CmdHistory,
+    ShowUserScreen,
     FocusMenu,
     Quit,
 }
@@ -94,6 +95,7 @@ pub const ALL_ACTIONS: &[Action] = &[
     Action::ChangeRoot,
     Action::DirHistory,
     Action::CmdHistory,
+    Action::ShowUserScreen,
     Action::FocusMenu,
     Action::Quit,
 ];
@@ -193,6 +195,10 @@ pub fn default_bindings() -> Vec<Binding> {
             action: Action::CmdHistory,
         },
         Binding {
+            key: kbmod::CTRL | vk::O,
+            action: Action::ShowUserScreen,
+        },
+        Binding {
             key: kbmod::CTRL | vk::R,
             action: Action::Refresh,
         },
@@ -286,7 +292,7 @@ pub fn default_bindings() -> Vec<Binding> {
             action: Action::Rename,
         },
         Binding {
-            key: kbmod::CTRL | vk::O,
+            key: kbmod::CTRL | vk::C,
             action: Action::Copy,
         },
         Binding {
@@ -447,6 +453,7 @@ fn action_meta(action: Action) -> (&'static str, &'static str) {
         Action::ChangeRoot => ("change_root", "Change root"),
         Action::DirHistory => ("dir_history", "Directory history"),
         Action::CmdHistory => ("cmd_history", "Command history"),
+        Action::ShowUserScreen => ("show_user_screen", "Show user screen"),
         Action::FocusMenu => ("focus_menu", "Focus menubar"),
         Action::Quit => ("quit", "Quit"),
     }
@@ -537,6 +544,7 @@ pub fn build_help_text(bindings: &[Binding]) -> Vec<(String, &'static str, Actio
         Some(Action::ChangeRoot),
         Some(Action::DirHistory),
         Some(Action::CmdHistory),
+        Some(Action::ShowUserScreen),
         Some(Action::Refresh),
         Some(Action::ToggleHidden),
         Some(Action::SortBy(SortBy::Name)),

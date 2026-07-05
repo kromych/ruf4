@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::platform;
+use crate::vfs;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SortBy {
@@ -158,6 +159,8 @@ pub struct Panel {
     pub sort_dir: SortDir,
     pub show_hidden: bool,
     pub last_refresh: String,
+    /// Available bytes on the panel's filesystem, sampled at refresh time.
+    pub free_space: Option<u64>,
 }
 
 impl Panel {
@@ -171,6 +174,7 @@ impl Panel {
             sort_dir: SortDir::Ascending,
             show_hidden: false,
             last_refresh: String::new(),
+            free_space: None,
         };
         panel.refresh();
         panel
@@ -186,12 +190,14 @@ impl Panel {
             sort_dir: SortDir::Ascending,
             show_hidden: false,
             last_refresh: String::new(),
+            free_space: None,
         }
     }
 
     pub fn refresh(&mut self) {
         self.last_refresh = platform::format_current_time();
-        self.entries = scan_dir(&self.path, self.show_hidden);
+        self.entries = vfs::scan_dir(&self.path, self.show_hidden);
+        self.free_space = vfs::free_space(&self.path);
         self.sort();
         self.cursor = self.cursor.min(self.entries.len().saturating_sub(1));
     }
@@ -268,12 +274,19 @@ impl Panel {
             && entry.is_dir
         {
             let new_path = if entry.name == ".." {
-                self.path.parent().unwrap_or(&self.path).to_path_buf()
+                vfs::parent(&self.path).unwrap_or_else(|| self.path.clone())
             } else {
-                self.path.join(&entry.name)
+                vfs::join(&self.path, &entry.name)
             };
 
-            if let Ok(canonical) = fs::canonicalize(&new_path) {
+            // Remote paths are normalized lexically by the vfs; resolving
+            // symlinks there would cost a round trip per navigation.
+            let canonical = if vfs::is_remote(&new_path) {
+                Ok(new_path)
+            } else {
+                fs::canonicalize(&new_path)
+            };
+            if let Ok(canonical) = canonical {
                 let old_name = self
                     .path
                     .file_name()
@@ -321,7 +334,7 @@ impl Panel {
     }
 
     pub fn current_path(&self) -> Option<PathBuf> {
-        self.current_entry().map(|e| self.path.join(&e.name))
+        self.current_entry().map(|e| vfs::join(&self.path, &e.name))
     }
 
     pub fn selected_or_current(&self) -> Vec<PathBuf> {
@@ -329,7 +342,7 @@ impl Panel {
             .entries
             .iter()
             .filter(|e| e.selected && e.name != "..")
-            .map(|e| self.path.join(&e.name))
+            .map(|e| vfs::join(&self.path, &e.name))
             .collect();
 
         if !selected.is_empty() {
@@ -339,7 +352,7 @@ impl Panel {
         if let Some(entry) = self.current_entry()
             && entry.name != ".."
         {
-            return vec![self.path.join(&entry.name)];
+            return vec![vfs::join(&self.path, &entry.name)];
         }
         Vec::new()
     }
@@ -392,10 +405,6 @@ impl Panel {
                 e.selected = select;
             }
         }
-    }
-
-    pub fn free_space(&self) -> Option<u64> {
-        platform::disk_free(&self.path)
     }
 
     pub fn navigate_to_prefix(&mut self, prefix: &str) {

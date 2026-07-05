@@ -89,9 +89,9 @@
 //! # Example
 //!
 //! ```
-//! use edit::helpers::Size;
-//! use edit::input::Input;
-//! use edit::tui::*;
+//! use ruf4_tui::helpers::Size;
+//! use ruf4_tui::input::Input;
+//! use ruf4_tui::tui::*;
 //! use stdext::{arena, arena_format};
 //!
 //! struct State {
@@ -2024,8 +2024,8 @@ impl<'a> Context<'a, '_> {
     ///
     /// # Example
     /// ```
-    /// use edit::framebuffer::IndexedColor;
-    /// use edit::tui::Context;
+    /// use ruf4_tui::framebuffer::IndexedColor;
+    /// use ruf4_tui::tui::Context;
     ///
     /// fn draw(ctx: &mut Context) {
     ///     ctx.styled_label_begin("label");
