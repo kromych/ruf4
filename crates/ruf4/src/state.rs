@@ -515,6 +515,11 @@ impl State {
 
     pub fn open_choose_root(&mut self) {
         let mut roots = platform::discover_roots();
+        for root in vfs::smb_roots() {
+            if !roots.contains(&root) {
+                roots.push(root);
+            }
+        }
         roots.extend(vfs::ssh_roots());
         if roots.is_empty() {
             return;

@@ -169,6 +169,25 @@ prompts work; subsequent channels multiplex over its socket. Set
 On Windows, where OpenSSH lacks multiplexing, authentication must be
 non-interactive (keys or an agent).
 
+## SMB shares
+
+`cd smb://[user@]host/share/path` opens an SMB share using the operating
+system's native client, so after navigation the panel works on an ordinary
+local directory:
+
+- **Windows**: the URL is rewritten to a UNC path (`\\host\share\path`); UNC
+  paths can also be entered directly.
+- **macOS**: the share is mounted with `mount_smbfs` under `~/.ruf4/mnt`,
+  prompting for the password with the panels hidden. Unmounted shares
+  remount automatically when revisited through the directory history.
+- **Linux**: the share is mounted in user space with `gio mount` (GVFS,
+  present on desktop distributions) and appears under the session's `gvfs`
+  directory.
+
+Mounted shares are listed in the change-root dialog (Ctrl+G) next to the
+local drives. Shares stay mounted when ruf4 exits; unmount with the usual
+system tools (`umount`, `gio mount -u`, Finder).
+
 ### Dialogs
 
 Most confirmation dialogs respond to:

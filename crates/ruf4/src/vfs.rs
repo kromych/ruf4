@@ -16,6 +16,9 @@
 //! socket without re-authenticating. On Windows multiplexing is unavailable;
 //! channels authenticate non-interactively (keys or agent).
 //!
+//! `smb://` locations resolve to local directories through [`crate::smb`]
+//! (the operating system's native SMB client); after navigation they are
+//! ordinary local paths.
 //! TODO: interactive ssh authentication on Windows.
 
 use std::collections::HashMap;
@@ -167,7 +170,7 @@ pub fn is_remote(path: &Path) -> bool {
 
 /// Whether `s` is a location URL in one of the vfs schemes.
 pub fn is_url(s: &str) -> bool {
-    s.starts_with(SCHEME)
+    s.starts_with(SCHEME) || s.starts_with(crate::smb::SCHEME)
 }
 
 /// Collapse `//`, `.`, and `..` in a POSIX path, lexically.
@@ -432,10 +435,20 @@ pub fn ensure_host(path: &Path) -> Result<(), String> {
 // ── Navigation ──────────────────────────────────────────────────────────────
 
 /// Resolve `path` to a directory the panel can show. Local paths are
-/// canonicalized and verified; `ssh://` paths bootstrap the connection
-/// (interactively when authentication is required), substitute the remote
-/// home for an empty path, and are verified to be directories.
+/// canonicalized and verified; `smb://` locations resolve to a local
+/// mountpoint (mounting the share first when needed); `ssh://` paths
+/// bootstrap the connection (interactively when authentication is required),
+/// substitute the remote home for an empty path, and are verified to be
+/// directories.
 pub fn prepare_dir(path: &Path) -> Result<PathBuf, String> {
+    if let Some(smb) = crate::smb::parse(path) {
+        let dir = crate::smb::resolve_dir(&smb)?;
+        return if dir.is_dir() {
+            Ok(dir)
+        } else {
+            Err(format!("Not a directory: {}", dir.display()))
+        };
+    }
     match parse_remote(path) {
         Some(r) => {
             ensure_master(&r.host)?;
@@ -465,12 +478,21 @@ pub fn prepare_dir(path: &Path) -> Result<PathBuf, String> {
         None => {
             let dest = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
             if dest.is_dir() {
-                Ok(dest)
-            } else {
-                Err(format!("Not a directory: {}", dest.display()))
+                return Ok(dest);
+            }
+            // A managed SMB mountpoint may simply be unmounted; remount it.
+            match crate::smb::try_remount(&dest) {
+                Some(Ok(())) if dest.is_dir() => Ok(dest),
+                Some(Err(message)) => Err(message),
+                _ => Err(format!("Not a directory: {}", dest.display())),
             }
         }
     }
+}
+
+/// SMB mountpoints for the roots dialog.
+pub fn smb_roots() -> Vec<PathBuf> {
+    crate::smb::mounted_roots()
 }
 
 // ── Directory listing ───────────────────────────────────────────────────────
