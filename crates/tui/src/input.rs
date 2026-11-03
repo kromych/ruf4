@@ -359,14 +359,12 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
                         '\0' => return Some(Input::Keyboard(vk::ESCAPE)),
                         '\n' => return Some(Input::Keyboard(kbmod::CTRL_ALT | vk::RETURN)),
                         ' '..='~' => {
-                            let ch = ch as u32;
-                            let key = ch & !0x20; // Shift a-z to A-Z
-                            let modifiers = if (ch & 0x20) != 0 {
-                                kbmod::ALT
-                            } else {
-                                kbmod::ALT_SHIFT
-                            };
-                            return Some(Input::Keyboard(modifiers | InputKey::new(key)));
+                            // Report the key an unmodified press reports, plus Alt: Alt+a is Alt+A,
+                            // Alt+A is Alt+Shift+A, Alt+1 is Alt+1. Punctuation keys depend on the
+                            // keyboard layout and have no VK, so they're dropped.
+                            if let Some(key) = InputKey::from_ascii(ch) {
+                                return Some(Input::Keyboard(kbmod::ALT | key));
+                            }
                         }
                         _ => {}
                     }
@@ -532,9 +530,12 @@ impl<'input> Stream<'_, '_, 'input> {
             return None;
         }
 
-        let b = self.parser.x10_mouse_buf[0] as u16 - 0x20;
-        let x = self.parser.x10_mouse_buf[1] as u16 - 0x20;
-        let y = self.parser.x10_mouse_buf[2] as u16 - 0x20;
+        // Each value is offset by 0x20. Saturate, as there's no telling what we read,
+        // e.g. if the user typed `ESC [ M` followed by a control character.
+        let [b, x, y] = self
+            .parser
+            .x10_mouse_buf
+            .map(|c| (c as u16).saturating_sub(0x20));
 
         self.parser.x10_mouse_want = false;
         self.parser.x10_mouse_len = 0;
@@ -636,6 +637,42 @@ mod tests {
         assert!(matches!(events[1], Input::Keyboard(key) if key == vk::UP));
     }
 
+    /// Parses `input` and returns its keyboard events, `None` for any other event.
+    fn parse_keys(input: &str) -> Vec<Option<u32>> {
+        let mut vt_parser = vt::Parser::new();
+        let mut parser = Parser::new();
+        parser
+            .parse(vt_parser.parse(input))
+            .map(|ev| match ev {
+                Input::Keyboard(key) => Some(key.value()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_alt_keys() {
+        let alt = |key: InputKey| Some((kbmod::ALT | key).value());
+        assert_eq!(
+            parse_keys("\x1ba\x1bz\x1bA\x1b0\x1b9\x1b "),
+            [
+                alt(vk::A),
+                alt(vk::Z),
+                alt(kbmod::SHIFT | vk::A),
+                alt(vk::N0),
+                alt(vk::N9),
+                alt(vk::SPACE),
+            ]
+        );
+
+        // Used to be reported as Alt+Enter, Alt+Backspace, Alt+Tab, etc.
+        // There's no VK for them, just like for their unmodified press.
+        assert_eq!(
+            parse_keys("\x1b-\x1b(\x1b)\x1b!\x1b~\x1b[A"),
+            [Some(vk::UP.value())]
+        );
+    }
+
     #[test]
     fn test_window_size_report_is_clamped() {
         let parse_resize = |input: &str| {
@@ -664,5 +701,28 @@ mod tests {
         assert_eq!(events.len(), 2);
         assert!(matches!(&events[0], Input::Paste(p) if p == b"\x1b[8;32767;32767t\x1b[A"));
         assert!(matches!(events[1], Input::Keyboard(key) if key == vk::UP));
+    }
+
+    #[test]
+    fn test_x10_mouse() {
+        let parse_mouse = |input: &str| {
+            let mut vt_parser = vt::Parser::new();
+            let mut parser = Parser::new();
+            let events: Vec<_> = parser.parse(vt_parser.parse(input)).collect();
+            assert_eq!(events.len(), 2);
+            assert!(matches!(events[1], Input::Keyboard(key) if key == vk::UP));
+            match events[0] {
+                Input::Mouse(mouse) => mouse.position,
+                _ => panic!("expected a mouse event"),
+            }
+        };
+
+        // Left button down at the 1-based column 3, row 1.
+        assert_eq!(parse_mouse("\x1b[M #!\x1b[A"), Point { x: 2, y: 0 });
+        // Control characters are below the 0x20 offset and must not underflow.
+        assert_eq!(
+            parse_mouse("\x1b[M\x01\x02\r\x1b[A"),
+            Point { x: -1, y: -1 }
+        );
     }
 }
