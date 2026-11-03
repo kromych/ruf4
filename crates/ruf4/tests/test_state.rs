@@ -470,3 +470,35 @@ fn test_cancelled_download_is_discarded_not_opened() {
     assert!(!target.exists(), "partial download must be removed");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+// --- Mouse clicks ---
+
+fn click_event(x: isize, y: isize) -> Input<'static> {
+    Input::Mouse(InputMouse {
+        state: InputMouseState::Left,
+        modifiers: kbmod::NONE,
+        position: Point { x, y },
+        scroll: Point { x: 0, y: 0 },
+        drag: false,
+    })
+}
+
+#[test]
+fn test_double_click_below_entries_does_nothing() {
+    let mut s = test_state();
+    s.left.cursor = 3; // "subdir"
+    // Rows 4..=7 hold the four entries; row 10 is empty.
+    s.handle_global_input(&click_event(5, 10));
+    s.handle_global_input(&click_event(5, 10));
+    assert_eq!(s.left.path, PathBuf::from("/test"));
+    assert_eq!(s.left.cursor, 3);
+}
+
+#[test]
+fn test_click_on_quick_view_leaves_panels_alone() {
+    let mut s = test_state(); // active == Left, so the preview is on the right half
+    s.quick_view = true;
+    s.handle_global_input(&click_event(60, 4));
+    assert_eq!(s.active, ActivePanel::Left);
+    assert_eq!(s.right.cursor, 0);
+}

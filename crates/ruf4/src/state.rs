@@ -916,6 +916,12 @@ impl State {
             let panel_width = w / 2;
             let clicked_left = pos.x < panel_width;
 
+            // With quick view on, the other half shows the preview, not the
+            // panel underneath it.
+            if self.quick_view && clicked_left != (self.active == ActivePanel::Left) {
+                return;
+            }
+
             if clicked_left && self.active != ActivePanel::Left {
                 self.active = ActivePanel::Left;
             } else if !clicked_left && self.active != ActivePanel::Right {
@@ -941,9 +947,9 @@ impl State {
                 let idx = panel.scroll_offset + entry_row;
                 if idx < panel.entries.len() {
                     panel.cursor = idx;
-                }
-                if is_double {
-                    self.open_or_enter();
+                    if is_double {
+                        self.open_or_enter();
+                    }
                 }
             }
         }
