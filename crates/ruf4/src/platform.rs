@@ -428,7 +428,10 @@ fn is_windows_admin() -> bool {
 pub fn settings_path() -> Option<PathBuf> {
     #[cfg(unix)]
     {
-        if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+        // Per the XDG spec, an empty or relative value is to be ignored.
+        if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME")
+            && Path::new(&xdg).is_absolute()
+        {
             return Some(PathBuf::from(xdg).join("ruf4").join("settings.ini"));
         }
         if let Ok(home) = std::env::var("HOME") {
@@ -452,13 +455,15 @@ pub fn settings_path() -> Option<PathBuf> {
 // ── Terminal screen switching ──────────────────────────────────────────────
 
 /// Leave the TUI screen: reset cursor style (DECSCUSR 0), show the cursor
-/// (DECTCEM), reset attributes, disable mouse tracking, then exit the
-/// alternate screen LAST so the primary screen is restored cleanly.
-pub const TUI_LEAVE_SEQ: &str = "\x1b[0 q\x1b[?25h\x1b[m\x1b[?1003;1006l\x1b[?1049l";
+/// (DECTCEM), reset attributes, disable mouse tracking and bracketed paste,
+/// then exit the alternate screen LAST so the primary screen is restored cleanly.
+pub const TUI_LEAVE_SEQ: &str = "\x1b[0 q\x1b[?25h\x1b[m\x1b[?1003;1006l\x1b[?2004l\x1b[?1049l";
 
 /// Enter the TUI screen: alternate screen buffer, then SGR mouse mode with
-/// all-motion tracking.
-pub const TUI_ENTER_SEQ: &str = "\x1b[?1049h\x1b[?1003;1006h";
+/// all-motion tracking, then bracketed paste, so pasted text arrives as
+/// [`Input::Paste`](ruf4_tui::input::Input::Paste) instead of being parsed
+/// as keys and escape sequences.
+pub const TUI_ENTER_SEQ: &str = "\x1b[?1049h\x1b[?1003;1006h\x1b[?2004h";
 
 /// Suspend the TUI (primary screen, cooked terminal modes), run `f`, then
 /// restore the TUI and inject a window-size event so the next frame repaints
@@ -467,17 +472,60 @@ pub fn with_tui_suspended<R>(f: impl FnOnce() -> R) -> R {
     use ruf4_tui::sys;
     sys::write_stdout(TUI_LEAVE_SEQ);
     sys::suspend();
+    #[cfg(unix)]
+    let saved = ignore_terminal_interrupts();
     let result = f();
+    #[cfg(unix)]
+    restore_terminal_interrupts(saved);
     sys::resume();
     sys::write_stdout(TUI_ENTER_SEQ);
     sys::inject_window_size_into_stdin();
     result
 }
 
+/// The signals the terminal sends to its whole foreground process group,
+/// ruf4 included, when the user presses Ctrl+C or Ctrl+\ in a child.
+#[cfg(unix)]
+const TERMINAL_INTERRUPTS: [libc::c_int; 2] = [libc::SIGINT, libc::SIGQUIT];
+
+/// Keep the terminal's interrupt keys from killing ruf4 while a child has
+/// the terminal. This catches the signals rather than ignoring them, since
+/// an ignored signal would stay ignored in the children too, while a caught
+/// one reverts to the default when they exec. SA_RESTART keeps the signal
+/// from failing the wait for the child or for Enter.
+#[cfg(unix)]
+fn ignore_terminal_interrupts() -> [libc::sigaction; 2] {
+    extern "C" fn noop(_: libc::c_int) {}
+
+    // SAFETY: plain sigaction calls with valid, initialized structs; the
+    // handler does nothing, so it is trivially async-signal-safe.
+    unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        action.sa_sigaction = noop as extern "C" fn(libc::c_int) as libc::sighandler_t;
+        action.sa_flags = libc::SA_RESTART;
+        libc::sigemptyset(&mut action.sa_mask);
+        let mut saved: [libc::sigaction; 2] = std::mem::zeroed();
+        for (signal, old) in TERMINAL_INTERRUPTS.iter().zip(&mut saved) {
+            libc::sigaction(*signal, &action, old);
+        }
+        saved
+    }
+}
+
+#[cfg(unix)]
+fn restore_terminal_interrupts(saved: [libc::sigaction; 2]) {
+    // SAFETY: restores dispositions previously returned by sigaction.
+    unsafe {
+        for (signal, old) in TERMINAL_INTERRUPTS.iter().zip(&saved) {
+            libc::sigaction(*signal, old, std::ptr::null_mut());
+        }
+    }
+}
+
 /// Show the user screen (the primary buffer with the output of previously run
 /// commands) until one of `exit_keys` is pressed. The terminal stays in raw
-/// mode and all other input is discarded. A window-size event is injected on
-/// return so the next frame repaints in full.
+/// mode and all other input is discarded. On return, the next read reports the
+/// window size, which may have changed meanwhile.
 pub fn view_user_screen(exit_keys: &[InputKey]) {
     use ruf4_tui::{input, sys, vt};
 
@@ -487,7 +535,8 @@ pub fn view_user_screen(exit_keys: &[InputKey]) {
     let mut input_parser = input::Parser::new();
     'wait: loop {
         let scratch = stdext::arena::scratch_arena(None);
-        let Some(text) = sys::read_stdin(&scratch, vt_parser.read_timeout()) else {
+        // A resize is picked up on return, along with the size report requested there.
+        let Some((_, text)) = sys::read_stdin(&scratch, vt_parser.read_timeout()) else {
             break; // EOF or read error; the main loop will observe it as well.
         };
         let stream = vt_parser.parse(&text);
@@ -545,15 +594,24 @@ pub fn run_foreground(
     })
 }
 
+/// `cmd.exe` set up to run `cmd` exactly as typed. cmd.exe doesn't parse its
+/// command line like other programs, so the usual argument quoting would turn
+/// `type "a b.txt"` into `"type \"a b.txt\""`. With `/S`, cmd.exe strips one
+/// pair of outer quotes and runs the rest verbatim.
+#[cfg(windows)]
+fn cmd_exe(cmd: &str) -> Command {
+    use std::os::windows::process::CommandExt;
+
+    let mut c = Command::new("cmd.exe");
+    c.raw_arg(format!("/S /C \"{cmd}\""));
+    c
+}
+
 /// Run a shell command in the foreground with the terminal handed back to it.
 /// The exit status is not treated as an error; the user saw the output.
 pub fn run_interactive(cmd: &str, cwd: &Path) -> Result<(), String> {
     #[cfg(windows)]
-    let mut command = {
-        let mut c = Command::new("cmd.exe");
-        c.arg("/C").arg(cmd);
-        c
-    };
+    let mut command = cmd_exe(cmd);
     #[cfg(not(windows))]
     let mut command = {
         let mut c = Command::new("sh");
@@ -573,11 +631,7 @@ pub fn run_command(cmd: &str, cwd: &Path) -> Result<(String, i32), String> {
         .output();
 
     #[cfg(windows)]
-    let output = Command::new("cmd.exe")
-        .arg("/C")
-        .arg(cmd)
-        .current_dir(cwd)
-        .output();
+    let output = cmd_exe(cmd).current_dir(cwd).output();
 
     #[cfg(not(any(unix, windows)))]
     let output = Command::new("sh")
@@ -609,20 +663,80 @@ pub fn run_command(cmd: &str, cwd: &Path) -> Result<(String, i32), String> {
 /// Open a file with the system-associated application.
 pub fn open_file(path: &Path) -> Result<(), String> {
     #[cfg(target_os = "macos")]
-    let result = Command::new("open").arg(path).spawn();
+    let result = Command::new("open").arg(path).spawn().map(|_| ());
 
     #[cfg(target_os = "windows")]
-    let result = Command::new("cmd")
-        .args(["/C", "start", ""])
-        .arg(path)
-        .spawn();
+    let result = shell_open(path);
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let result = Command::new("xdg-open").arg(path).spawn();
+    let result = Command::new("xdg-open").arg(path).spawn().map(|_| ());
 
-    result
-        .map(|_| ())
-        .map_err(|e| format!("Cannot open \"{}\": {e}", path.display()))
+    result.map_err(|e| format!("Cannot open \"{}\": {e}", path.display()))
+}
+
+/// Open `path` through the shell's file associations. Unlike `cmd /C start`,
+/// this doesn't interpret `&`, `^` or `%` in the name, which can come from a
+/// remote server: opening a download named `x&calc` would run `calc`.
+#[cfg(windows)]
+fn shell_open(path: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr;
+
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let file: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+    // SAFETY: `file` is NUL-terminated and outlives the call. Null pointers
+    // select the default verb and no parameters or working directory.
+    let result = unsafe {
+        ShellExecuteW(
+            ptr::null_mut(),
+            ptr::null(),
+            file.as_ptr(),
+            ptr::null(),
+            ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    // Anything above 32 means success, the rest are error codes.
+    if result as usize > 32 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+/// A directory `name` under the temporary directory that only the current
+/// user can access. On Unix that's shared: a directory someone else created
+/// first, e.g. to plant symlinks to the user's files, is refused.
+pub fn private_temp_dir(name: &str) -> std::io::Result<PathBuf> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+
+        // SAFETY: geteuid() has no preconditions and cannot fail.
+        let uid = unsafe { libc::geteuid() };
+        let dir = std::env::temp_dir().join(format!("{name}-{uid}"));
+        match fs::DirBuilder::new().mode(0o700).create(&dir) {
+            Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => return Err(e),
+            _ => {}
+        }
+        let meta = fs::symlink_metadata(&dir)?;
+        if !meta.is_dir() || meta.uid() != uid || meta.mode() & 0o077 != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!("{} is not a private directory", dir.display()),
+            ));
+        }
+        Ok(dir)
+    }
+    #[cfg(not(unix))]
+    {
+        // The temporary directory is per user.
+        let dir = std::env::temp_dir().join(name);
+        fs::create_dir_all(&dir)?;
+        Ok(dir)
+    }
 }
 
 /// Home directory.
@@ -711,7 +825,9 @@ pub fn copy_symlink(src: &Path, dst: &Path) -> std::io::Result<()> {
     }
     #[cfg(windows)]
     {
-        if link_target.is_dir() {
+        // Ask the link itself: a relative target can't be resolved from here.
+        use std::os::windows::fs::FileTypeExt;
+        if fs::symlink_metadata(src)?.file_type().is_symlink_dir() {
             std::os::windows::fs::symlink_dir(&link_target, dst)
         } else {
             std::os::windows::fs::symlink_file(&link_target, dst)

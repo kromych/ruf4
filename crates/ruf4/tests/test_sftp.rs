@@ -720,13 +720,17 @@ impl Drop for ChildIo {
 }
 
 fn spawn_sftp_server() -> Option<ChildIo> {
-    let path = [
-        "/usr/libexec/sftp-server",
-        "/usr/lib/openssh/sftp-server",
-        "/usr/lib/ssh/sftp-server",
-    ]
-    .iter()
-    .find(|p| std::path::Path::new(p).exists())?;
+    // `RUF4_SFTP_SERVER` points at a binary outside the system locations.
+    let path = std::env::var("RUF4_SFTP_SERVER").ok().or_else(|| {
+        [
+            "/usr/libexec/sftp-server",
+            "/usr/lib/openssh/sftp-server",
+            "/usr/lib/ssh/sftp-server",
+        ]
+        .iter()
+        .find(|p| std::path::Path::new(p).exists())
+        .map(|p| p.to_string())
+    })?;
     let mut child = std::process::Command::new(path)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -765,6 +769,23 @@ fn against_real_openssh_sftp_server() {
     // mkdir, write, read back.
     let sub = format!("{root_s}/sub");
     c.mkdir(&sub).unwrap();
+
+    // Requested permissions apply to what gets created.
+    let private = format!("{root_s}/private");
+    c.mkdir_with_mode(&private, Some(0o700)).unwrap();
+    let perms = c.stat(&private).unwrap().permissions;
+    assert_eq!(perms.map(|m| m & 0o777), Some(0o700));
+    let key = format!("{private}/key");
+    let handle = c
+        .open_with_mode(&key, OPEN_WRITE | OPEN_CREAT | OPEN_TRUNC, Some(0o600))
+        .unwrap();
+    c.close(&handle).unwrap();
+    let perms = c.stat(&key).unwrap().permissions;
+    assert_eq!(perms.map(|m| m & 0o777), Some(0o600));
+    c.set_permissions(&private, 0o500).unwrap();
+    let perms = c.stat(&private).unwrap().permissions;
+    assert_eq!(perms.map(|m| m & 0o777), Some(0o500));
+    c.set_permissions(&private, 0o700).unwrap();
     let file = format!("{root_s}/data.bin");
     let payload: Vec<u8> = (0..(MAX_DATA * 2 + 17)).map(|i| (i % 256) as u8).collect();
     let handle = c.open(&file, OPEN_WRITE | OPEN_CREAT | OPEN_TRUNC).unwrap();
@@ -820,6 +841,8 @@ fn against_real_openssh_sftp_server() {
 
     // Cleanup through the protocol.
     c.remove(&file2).unwrap();
+    c.remove(&key).unwrap();
+    c.rmdir(&private).unwrap();
     c.rmdir(&sub).unwrap();
     c.rmdir(root_s).unwrap();
     assert!(!root.exists());

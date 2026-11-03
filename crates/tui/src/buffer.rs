@@ -1,3 +1,6 @@
+// Copyright (c) 2026 ruf4 contributors.
+// Licensed under the MIT License.
+
 // Stub module providing editor buffer types needed by tui.rs.
 // These are unused in ruf4 but required for compilation.
 // The actual implementations live in Microsoft Edit's edit crate.
@@ -71,6 +74,7 @@ impl TextBuffer {
     pub fn select_word(&mut self) {}
     pub fn select_line(&mut self) {}
     pub fn delete(&mut self, _g: CursorMovement, _d: i32) {}
+    pub fn backspace_with_auto_unindent(&mut self, _g: CursorMovement) {}
     pub fn indent_change(&mut self, _d: i32) {}
     pub fn indent_end_logical_pos(&self) -> Point {
         Point::default()
@@ -94,7 +98,7 @@ impl TextBuffer {
     pub fn redo(&mut self) {}
     pub fn copy(&mut self, _clip: &mut crate::clipboard::Clipboard) {}
     pub fn cut(&mut self, _clip: &mut crate::clipboard::Clipboard) {}
-    pub fn paste(&mut self, _clip: &crate::clipboard::Clipboard) {}
+    pub fn paste(&mut self, _clip: &crate::clipboard::Clipboard, _single_line: bool) {}
     pub fn move_selected_lines(&mut self, _d: MoveLineDirection) {}
     pub fn render(
         &mut self,

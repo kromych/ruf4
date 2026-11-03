@@ -30,9 +30,13 @@ def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
 
 
 def read_version(root: Path) -> str:
-    cargo_toml = root / "crates" / "ruf4" / "Cargo.toml"
-    text = cargo_toml.read_text()
-    m = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
+    # The version lives in [workspace.package] and is inherited by the crates.
+    text = (root / "Cargo.toml").read_text()
+    m = re.search(
+        r'^\[workspace\.package\].*?^version\s*=\s*"([^"]+)"',
+        text,
+        re.MULTILINE | re.DOTALL,
+    )
     if not m:
         sys.exit("Error: could not read version from Cargo.toml")
     return m.group(1)

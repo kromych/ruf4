@@ -1,11 +1,20 @@
 [package]
-name = "stdext"
-version = "0.0.0"
+name = "ruf4-stdext"
+description = "Arena allocators, collections, SIMD and Unicode helpers used by ruf4, derived from Microsoft Edit"
+keywords = ["arena", "allocator", "simd", "unicode", "collections"]
+categories = ["memory-management", "data-structures", "text-processing"]
+readme = "ReadMe.md"
 
+version.workspace = true
+authors = ["Microsoft Corporation", "ruf4 contributors"]
 edition.workspace = true
+homepage.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+
+[lib]
+name = "stdext"
 
 [features]
 single-threaded = []

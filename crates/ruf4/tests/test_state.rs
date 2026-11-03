@@ -1,3 +1,6 @@
+// Copyright (c) 2026 ruf4 contributors.
+// Licensed under the MIT License.
+
 use std::path::PathBuf;
 
 use ruf4::panel::{Panel, make_entry};
@@ -229,6 +232,93 @@ fn test_command_line_delete_and_cursor_moves() {
     // END moves to the end.
     s.handle_global_input(&Input::Keyboard(vk::END));
     assert_eq!(s.cmd_cursor, 1);
+}
+
+#[test]
+fn test_command_line_backspace_at_start_stays_on_line() {
+    let mut s = test_state();
+    s.command_line_active = true;
+    s.command_line = "abc".to_string();
+    s.cmd_cursor = 0;
+    s.handle_global_input(&Input::Keyboard(vk::BACK));
+    assert_eq!(s.command_line, "abc");
+    assert!(s.command_line_active);
+    assert_eq!(s.left.path, PathBuf::from("/test")); // not ParentDir
+}
+
+// --- Command line history autocompletion ---
+
+fn state_with_history(history: &[&str]) -> State {
+    let mut s = test_state();
+    s.cmd_history = history.iter().map(|c| c.to_string()).collect();
+    s
+}
+
+fn type_text(s: &mut State, text: &str) {
+    s.handle_global_input(&Input::Text(text));
+}
+
+#[test]
+fn test_suggestion_is_most_recent_matching_command() {
+    // History is most recent first.
+    let mut s = state_with_history(&["git status", "cargo test -q", "cargo build"]);
+    assert_eq!(s.cmd_suggestion(), None);
+    type_text(&mut s, "car");
+    assert_eq!(s.cmd_suggestion(), Some("go test -q"));
+    type_text(&mut s, "go b");
+    assert_eq!(s.cmd_suggestion(), Some("uild"));
+    type_text(&mut s, "uild");
+    assert_eq!(s.cmd_suggestion(), None); // nothing left to add
+    type_text(&mut s, "x");
+    assert_eq!(s.cmd_suggestion(), None); // no match
+}
+
+#[test]
+fn test_suggestion_only_at_end_of_line() {
+    let mut s = state_with_history(&["cargo test"]);
+    type_text(&mut s, "car");
+    s.handle_global_input(&Input::Keyboard(vk::LEFT));
+    assert_eq!(s.cmd_suggestion(), None);
+    // END first moves to the end, where the suggestion shows again.
+    s.handle_global_input(&Input::Keyboard(vk::END));
+    assert_eq!(s.cmd_suggestion(), Some("go test"));
+}
+
+#[test]
+fn test_right_and_end_accept_suggestion() {
+    for key in [vk::RIGHT, vk::END] {
+        let mut s = state_with_history(&["cargo test"]);
+        type_text(&mut s, "car");
+        s.handle_global_input(&Input::Keyboard(key));
+        assert_eq!(s.command_line, "cargo test");
+        assert_eq!(s.cmd_cursor, "cargo test".len());
+    }
+}
+
+#[test]
+fn test_ctrl_right_accepts_one_word() {
+    let mut s = state_with_history(&["cargo test --workspace -q"]);
+    type_text(&mut s, "ca");
+    let ctrl_right = Input::Keyboard(kbmod::CTRL | vk::RIGHT);
+    s.handle_global_input(&ctrl_right);
+    assert_eq!(s.command_line, "cargo");
+    s.handle_global_input(&ctrl_right);
+    assert_eq!(s.command_line, "cargo test");
+    s.handle_global_input(&ctrl_right);
+    assert_eq!(s.command_line, "cargo test --workspace");
+    assert_eq!(s.cmd_suggestion(), Some(" -q"));
+}
+
+#[test]
+fn test_enter_runs_only_typed_text() {
+    let mut s = state_with_history(&["cd subdir-that-is-suggested"]);
+    type_text(&mut s, "cd");
+    assert!(s.cmd_suggestion().is_some());
+    // `cd` is handled internally (no process is spawned): with only the
+    // typed text, it goes home rather than into the suggested directory.
+    s.handle_global_input(&Input::Keyboard(vk::RETURN));
+    assert_ne!(s.left.path, PathBuf::from("/test/subdir-that-is-suggested"));
+    assert_eq!(s.cmd_history[0], "cd");
 }
 
 #[test]
@@ -469,4 +559,64 @@ fn test_cancelled_download_is_discarded_not_opened() {
     assert!(matches!(s.dialog, Dialog::None));
     assert!(!target.exists(), "partial download must be removed");
     let _ = std::fs::remove_dir_all(&root);
+}
+
+// --- Mouse clicks ---
+
+fn click_event(x: isize, y: isize) -> Input<'static> {
+    Input::Mouse(InputMouse {
+        state: InputMouseState::Left,
+        modifiers: kbmod::NONE,
+        position: Point { x, y },
+        scroll: Point { x: 0, y: 0 },
+        drag: false,
+    })
+}
+
+#[test]
+fn test_double_click_below_entries_does_nothing() {
+    let mut s = test_state();
+    s.left.cursor = 3; // "subdir"
+    // Rows 4..=7 hold the four entries; row 10 is empty.
+    s.handle_global_input(&click_event(5, 10));
+    s.handle_global_input(&click_event(5, 10));
+    assert_eq!(s.left.path, PathBuf::from("/test"));
+    assert_eq!(s.left.cursor, 3);
+}
+
+#[test]
+fn test_click_on_quick_view_leaves_panels_alone() {
+    let mut s = test_state(); // active == Left, so the preview is on the right half
+    s.quick_view = true;
+    s.handle_global_input(&click_event(60, 4));
+    assert_eq!(s.active, ActivePanel::Left);
+    assert_eq!(s.right.cursor, 0);
+}
+
+// --- Bracketed paste ---
+
+#[test]
+fn test_paste_goes_to_command_line_as_plain_text() {
+    let mut s = test_state();
+    // A leading `+` would otherwise open "Select group".
+    s.handle_global_input(&Input::Paste(b"+x && echo\r\nrm -rf y\n".to_vec()));
+    assert!(matches!(s.dialog, Dialog::None));
+    assert!(s.command_line_active);
+    assert_eq!(s.command_line, "+x && echo  rm -rf y");
+    assert_eq!(s.cmd_cursor, s.command_line.chars().count());
+}
+
+#[test]
+fn test_paste_fills_text_dialogs_but_answers_no_prompt() {
+    let mut s = test_state();
+    s.handle_global_input(&Input::Keyboard(vk::F7)); // MkDir
+    s.handle_global_input(&Input::Paste(b"new dir".to_vec()));
+    assert!(matches!(&s.dialog, Dialog::MkDir { name } if name == "new dir"));
+
+    s.dialog = Dialog::ConfirmQuit {
+        save_settings: true,
+    };
+    s.handle_global_input(&Input::Paste(b"y".to_vec()));
+    assert!(matches!(s.dialog, Dialog::ConfirmQuit { .. }));
+    assert!(!s.quit);
 }

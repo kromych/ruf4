@@ -336,7 +336,11 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
                     return Some(Input::Text(text));
                 }
                 vt::Token::Ctrl(ch) => match ch {
-                    '\0' => return Some(Input::Keyboard(kbmod::CTRL | vk::SPACE)),
+                    '\0' => {
+                        // Both Ctrl+Space and Ctrl+Shift+2 produce \0, and
+                        // Ctrl+Space is probably the more common of the two.
+                        return Some(Input::Keyboard(kbmod::CTRL | vk::SPACE));
+                    }
                     '\t' | '\r' => return Some(Input::Keyboard(InputKey::new(ch as u32))),
                     '\n' => return Some(Input::Keyboard(kbmod::CTRL | vk::RETURN)),
                     ..='\x1a' => {
@@ -352,14 +356,12 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
                         '\0' => return Some(Input::Keyboard(vk::ESCAPE)),
                         '\n' => return Some(Input::Keyboard(kbmod::CTRL_ALT | vk::RETURN)),
                         ' '..='~' => {
-                            let ch = ch as u32;
-                            let key = ch & !0x20; // Shift a-z to A-Z
-                            let modifiers = if (ch & 0x20) != 0 {
-                                kbmod::ALT
-                            } else {
-                                kbmod::ALT_SHIFT
-                            };
-                            return Some(Input::Keyboard(modifiers | InputKey::new(key)));
+                            // Report the key an unmodified press reports, plus Alt: Alt+a is Alt+A,
+                            // Alt+A is Alt+Shift+A, Alt+1 is Alt+1. Punctuation keys depend on the
+                            // keyboard layout and have no VK, so they're dropped.
+                            if let Some(key) = InputKey::from_ascii(ch) {
+                                return Some(Input::Keyboard(kbmod::ALT | key));
+                            }
                         }
                         _ => {}
                     }
@@ -377,6 +379,13 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
                     }
                     _ => {}
                 },
+                vt::Token::Csi(csi) if csi.private_byte == '[' => {
+                    // The Linux console's F1 to F5: `ESC [ [ A` to `ESC [ [ E`.
+                    if let 'A'..='E' = csi.final_byte {
+                        let key = vk::F1.value() + csi.final_byte as u32 - 'A' as u32;
+                        return Some(Input::Keyboard(InputKey::new(key)));
+                    }
+                }
                 vt::Token::Csi(csi) => {
                     match csi.final_byte {
                         'A'..='H' => {
@@ -450,12 +459,6 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
                         'M' if csi.param_count == 0 => {
                             self.parser.x10_mouse_want = true;
                         }
-                        't' if csi.params[0] == 8 => {
-                            // Window Size
-                            let width = (csi.params[2] as CoordType).clamp(1, 32767);
-                            let height = (csi.params[1] as CoordType).clamp(1, 32767);
-                            return Some(Input::Resize(Size { width, height }));
-                        }
                         _ => {}
                     }
                 }
@@ -525,9 +528,12 @@ impl<'input> Stream<'_, '_, 'input> {
             return None;
         }
 
-        let b = self.parser.x10_mouse_buf[0] as u16 - 0x20;
-        let x = self.parser.x10_mouse_buf[1] as u16 - 0x20;
-        let y = self.parser.x10_mouse_buf[2] as u16 - 0x20;
+        // Each value is offset by 0x20. Saturate, as there's no telling what we read,
+        // e.g. if the user typed `ESC [ M` followed by a control character.
+        let [b, x, y] = self
+            .parser
+            .x10_mouse_buf
+            .map(|c| (c as u16).saturating_sub(0x20));
 
         self.parser.x10_mouse_want = false;
         self.parser.x10_mouse_len = 0;
@@ -578,9 +584,9 @@ impl<'input> Stream<'_, '_, 'input> {
             // I know there's an InputMouseState::Release, but that's because the internals of tui.rs
             // have leaked into intput.rs. input.rs indicates release by the absence of buttons being
             // held, which is InputMouseState::None. This makes it more reliable in my opinion.
-        } else if (WHEEL..WHEEL + 4).contains(&kind) {
-            let delta = if (kind & 1) != 0 { 3 } else { -3 };
-            let idx = if (kind & 2) != 0 { 0 } else { 1 };
+        } else if (WHEEL..WHEEL + 0x04).contains(&kind) {
+            let delta = if (btn & 0x01) != 0 { 1 } else { -1 };
+            let idx = if (btn & (0x02 | SHIFT)) != 0 { 0 } else { 1 };
             mouse.scroll.as_array()[idx] += delta;
             mouse.state = InputMouseState::Scroll;
         } else if (kind & !MOTION) < 3 {
@@ -611,5 +617,108 @@ impl<'input> Stream<'_, '_, 'input> {
         };
 
         Some(Input::Mouse(mouse))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_xterm_mouse_too_many_params() {
+        let input = format!("\x1b[<{}M\x1b[A", ";".repeat(40));
+        let mut vt_parser = vt::Parser::new();
+        let mut parser = Parser::new();
+        let events: Vec<_> = parser.parse(vt_parser.parse(&input)).collect();
+        assert_eq!(events.len(), 2);
+        assert!(matches!(events[0], Input::Mouse(_)));
+        assert!(matches!(events[1], Input::Keyboard(key) if key == vk::UP));
+    }
+
+    /// Parses `input` and returns its keyboard events, `None` for any other event.
+    fn parse_keys(input: &str) -> Vec<Option<u32>> {
+        let mut vt_parser = vt::Parser::new();
+        let mut parser = Parser::new();
+        parser
+            .parse(vt_parser.parse(input))
+            .map(|ev| match ev {
+                Input::Keyboard(key) => Some(key.value()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_alt_keys() {
+        let alt = |key: InputKey| Some((kbmod::ALT | key).value());
+        assert_eq!(
+            parse_keys("\x1ba\x1bz\x1bA\x1b0\x1b9\x1b "),
+            [
+                alt(vk::A),
+                alt(vk::Z),
+                alt(kbmod::SHIFT | vk::A),
+                alt(vk::N0),
+                alt(vk::N9),
+                alt(vk::SPACE),
+            ]
+        );
+
+        // Used to be reported as Alt+Enter, Alt+Backspace, Alt+Tab, etc.
+        // There's no VK for them, just like for their unmodified press.
+        assert_eq!(
+            parse_keys("\x1b-\x1b(\x1b)\x1b!\x1b~\x1b[A"),
+            [Some(vk::UP.value())]
+        );
+    }
+
+    #[test]
+    fn test_linux_console_function_keys() {
+        let key = |key: InputKey| Some(key.value());
+        assert_eq!(
+            parse_keys("\x1b[[A\x1b[[B\x1b[[C\x1b[[D\x1b[[E\x1b[A\x1b[17~"),
+            [
+                key(vk::F1),
+                key(vk::F2),
+                key(vk::F3),
+                key(vk::F4),
+                key(vk::F5),
+                key(vk::UP),
+                key(vk::F6),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_bracketed_paste_is_taken_literally() {
+        let input = "\x1b[200~\x1b[8;32767;32767t\x1b[A\x1b[201~\x1b[A";
+        let mut vt_parser = vt::Parser::new();
+        let mut parser = Parser::new();
+        let events: Vec<_> = parser.parse(vt_parser.parse(input)).collect();
+        assert_eq!(events.len(), 2);
+        assert!(matches!(&events[0], Input::Paste(p) if p == b"\x1b[8;32767;32767t\x1b[A"));
+        assert!(matches!(events[1], Input::Keyboard(key) if key == vk::UP));
+    }
+
+    #[test]
+    fn test_x10_mouse() {
+        let parse_mouse = |input: &str| {
+            let mut vt_parser = vt::Parser::new();
+            let mut parser = Parser::new();
+            let events: Vec<_> = parser.parse(vt_parser.parse(input)).collect();
+            assert_eq!(events.len(), 2);
+            assert!(matches!(events[1], Input::Keyboard(key) if key == vk::UP));
+            match events[0] {
+                Input::Mouse(mouse) => mouse.position,
+                _ => panic!("expected a mouse event"),
+            }
+        };
+
+        // Left button down at the 1-based column 3, row 1.
+        assert_eq!(parse_mouse("\x1b[M #!\x1b[A"), Point { x: 2, y: 0 });
+        // Control characters are below the 0x20 offset and must not underflow.
+        assert_eq!(
+            parse_mouse("\x1b[M\x01\x02\r\x1b[A"),
+            Point { x: -1, y: -1 }
+        );
     }
 }

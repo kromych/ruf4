@@ -149,7 +149,7 @@ use std::{io, iter, mem, ptr, time};
 
 use stdext::arena::{Arena, scratch_arena};
 use stdext::collections::{BString, BVec};
-use stdext::{arena_format, arena_write_fmt, opt_ptr_eq, str_from_raw_parts};
+use stdext::{ReplaceRange, arena_write_fmt, opt_ptr_eq, str_from_raw_parts};
 
 use crate::buffer::{CursorMovement, MoveLineDirection, RcTextBuffer, TextBuffer, TextBufferCell};
 use crate::cell::*;
@@ -282,7 +282,7 @@ impl ButtonStyle {
             ..self
         }
     }
-    /// Draw a checkbox prefix: `[🗹 Example Button]`
+    /// Draw a checkbox prefix: `[◼ Example Button]`
     pub fn checked(self, checked: bool) -> Self {
         Self {
             checked: Some(checked),
@@ -355,6 +355,8 @@ pub struct Tui {
     /// The number of clicks that have happened in a row.
     /// Gets reset when the mouse was released for a while.
     mouse_click_counter: CoordType,
+    /// The path to the node that is currently being hovered over.
+    mouse_hover_node_path: Vec<u64>,
     /// The path to the node that was clicked on.
     mouse_down_node_path: Vec<u64>,
     /// The position of the first click in a double/triple click series.
@@ -369,6 +371,10 @@ pub struct Tui {
     /// This way we can track if the focus changed, because then we
     /// need to scroll the node into view if it's within a scrollarea.
     focused_node_for_scrolling: u64,
+
+    /// The menubar button whose menu is open and can be closed by clicking it again.
+    /// Only set once the press that opened the menu has ended.
+    menubar_toggle_id: u64,
 
     /// A list of cached text buffers used for [`Context::editline()`].
     cached_text_buffers: Vec<CachedTextBuffer>,
@@ -408,8 +414,8 @@ impl Tui {
             modal_default_fg: StraightRgba::zero(),
 
             size: Size {
-                width: 0,
-                height: 0,
+                width: 80,
+                height: 24,
             },
             mouse_position: Point::MIN,
             mouse_down_position: Point::MIN,
@@ -418,12 +424,14 @@ impl Tui {
             mouse_state: InputMouseState::None,
             mouse_is_drag: false,
             mouse_click_counter: 0,
+            mouse_hover_node_path: Vec::with_capacity(16),
             mouse_down_node_path: Vec::with_capacity(16),
             first_click_position: Point::MIN,
             first_click_target: 0,
 
             focused_node_path: Vec::with_capacity(16),
             focused_node_for_scrolling: ROOT_ID,
+            menubar_toggle_id: 0,
 
             cached_text_buffers: Vec::with_capacity(16),
 
@@ -431,8 +439,9 @@ impl Tui {
 
             settling_have: 0,
             settling_want: 0,
-            read_timeout: time::Duration::MAX,
+            read_timeout: time::Duration::ZERO,
         };
+        Self::clean_node_path(&mut tui.mouse_hover_node_path);
         Self::clean_node_path(&mut tui.mouse_down_node_path);
         Self::clean_node_path(&mut tui.focused_node_path);
         Ok(tui)
@@ -479,6 +488,11 @@ impl Tui {
         // We don't use the size stored in the framebuffer, because until
         // `render()` is called, the framebuffer will use a stale size.
         self.size
+    }
+
+    /// Set the viewport size.
+    pub fn set_size(&mut self, size: Size) {
+        self.size = size;
     }
 
     /// Returns an indexed color from the framebuffer.
@@ -584,7 +598,7 @@ impl Tui {
             Some(Input::Mouse(mouse)) => {
                 let mut next_state = mouse.state;
                 let next_position = mouse.position;
-                let next_scroll = mouse.scroll;
+                let mut next_scroll = mouse.scroll;
                 let mouse_down = self.mouse_state == InputMouseState::None
                     && next_state != InputMouseState::None;
                 let mouse_up = self.mouse_state != InputMouseState::None
@@ -596,45 +610,52 @@ impl Tui {
 
                 let mut hovered_node = None; // Needed for `mouse_down`
                 let mut focused_node = None; // Needed for `mouse_down` and `is_click`
-                if mouse_down || mouse_up {
-                    // Roots (aka windows) are ordered in Z order, so we iterate
-                    // them in reverse order, from topmost to bottommost.
-                    for root in self.prev_tree.iterate_roots_rev() {
-                        // Find the node that contains the cursor.
-                        Tree::visit_all(root, root, true, |node| {
-                            let n = node.borrow();
-                            if !n.outer_clipped.contains(next_position) {
-                                // Skip the entire sub-tree, because it doesn't contain the cursor.
-                                return VisitControl::SkipChildren;
-                            }
-                            hovered_node = Some(node);
-                            if n.attributes.focusable {
-                                focused_node = Some(node);
-                            }
-                            VisitControl::Continue
-                        });
-
-                        // This root/window contains the cursor.
-                        // We don't care about any lower roots.
-                        if hovered_node.is_some() {
-                            break;
+                // Roots (aka windows) are ordered in Z order, so we iterate
+                // them in reverse order, from topmost to bottommost.
+                for root in self.prev_tree.iterate_roots_rev() {
+                    // Find the node that contains the cursor.
+                    Tree::visit_all(root, root, true, |node| {
+                        let n = node.borrow();
+                        if !n.outer_clipped.contains(next_position) {
+                            // Skip the entire sub-tree, because it doesn't contain the cursor.
+                            return VisitControl::SkipChildren;
                         }
-
-                        // This root is modal and swallows all clicks,
-                        // no matter whether the click was inside it or not.
-                        if matches!(root.borrow().content, NodeContent::Modal(_)) {
-                            break;
+                        hovered_node = Some(node);
+                        if n.attributes.focusable {
+                            focused_node = Some(node);
                         }
+                        VisitControl::Continue
+                    });
+
+                    // This root/window contains the cursor.
+                    // We don't care about any lower roots.
+                    if hovered_node.is_some() {
+                        break;
+                    }
+
+                    // This root is modal and swallows all clicks,
+                    // no matter whether the click was inside it or not.
+                    if matches!(root.borrow().content, NodeContent::Modal(_)) {
+                        break;
                     }
                 }
 
+                Self::build_node_path(hovered_node, &mut self.mouse_hover_node_path);
+
                 if is_scroll {
                     next_state = self.mouse_state;
+                    next_scroll.x *= 7;
+                    next_scroll.y *= 3;
+                    if mouse.modifiers.contains(kbmod::ALT) {
+                        next_scroll.x *= 5;
+                        next_scroll.y *= 5;
+                    }
                 } else if is_drag {
                     self.mouse_is_drag = true;
                 } else if mouse_down {
                     // Transition from no mouse input to some mouse input --> Record the mouse down position.
-                    Self::build_node_path(hovered_node, &mut self.mouse_down_node_path);
+                    self.mouse_down_node_path
+                        .replace_range(.., &self.mouse_hover_node_path);
 
                     // On left-mouse-down we change focus.
                     let mut target = 0;
@@ -1253,7 +1274,7 @@ impl Tui {
                     result.push_str(arena, "  bordered:     true\r\n");
                 }
 
-                if node.attributes.bg.to_ne() != 0 {
+                if node.attributes.bg.to_rgba() != 0 {
                     result.push_repeat(arena, ' ', depth * 2);
                     arena_write_fmt!(
                         arena,
@@ -1263,7 +1284,7 @@ impl Tui {
                     );
                 }
 
-                if node.attributes.fg.to_ne() != 0 {
+                if node.attributes.fg.to_rgba() != 0 {
                     result.push_repeat(arena, ' ', depth * 2);
                     arena_write_fmt!(
                         arena,
@@ -1306,6 +1327,14 @@ impl Tui {
         }
 
         result
+    }
+
+    fn was_mouse_hover_on_node(&self, id: u64) -> bool {
+        self.mouse_hover_node_path.last() == Some(&id)
+    }
+
+    fn was_mouse_hover_on_subtree(&self, node: &Node) -> bool {
+        self.mouse_hover_node_path.get(node.depth) == Some(&node.id)
     }
 
     fn was_mouse_down_on_node(&self, id: u64) -> bool {
@@ -1437,7 +1466,7 @@ impl<'a> Drop for Context<'a, '_> {
 }
 
 impl<'a> Context<'a, '_> {
-    /// Get an arena for temporary allocations such as for [`arena_format`].
+    /// Get an arena for temporary allocations such as for [`arena_format`](stdext::arena_format).
     pub fn arena(&self) -> &'a Arena {
         // TODO:
         // `Context` borrows `Tui` for lifetime 'a, so `self.tui` should be `&'a Tui`, right?
@@ -1534,6 +1563,11 @@ impl<'a> Context<'a, '_> {
         // At this point, it's more like "focus_well?" instead of "focus_well!".
         let focus_well = self.tree.last_node;
 
+        // Only blocks containing the focus participate in focus traversal.
+        if !self.tui.is_subtree_focused(&focus_well.borrow()) {
+            return;
+        }
+
         // Remember the focused node, if any, because once the code below runs,
         // we need it for the `Tree::visit_all` call.
         if self.is_focused() {
@@ -1546,14 +1580,9 @@ impl<'a> Context<'a, '_> {
             return;
         };
 
-        // Filter down to nodes that are focus wells and contain the focus. They're
-        // basically the "tab container". We test for the node depth to ensure that
-        // we don't accidentally pick a focus well next to or inside the focused node.
-        {
-            let n = focus_well.borrow();
-            if !n.attributes.focus_well || n.depth > focused.borrow().depth {
-                return;
-            }
+        // Focus wells are the containers within which Tab traversal wraps.
+        if !focus_well.borrow().attributes.focus_well {
+            return;
         }
 
         // Filter down to Tab/Shift+Tab inputs.
@@ -1836,12 +1865,13 @@ impl<'a> Context<'a, '_> {
         self.focus_on_first_present();
 
         let mut last_node = self.tree.last_node.borrow_mut();
-        let title = if title.is_empty() {
-            BString::empty()
-        } else {
-            arena_format!(self.arena(), " {} ", title)
-        };
-        last_node.content = NodeContent::Modal(title);
+        let mut title_text = BString::empty();
+        if !title.is_empty() {
+            title_text.push(self.arena(), ' ');
+            push_sanitized(self.arena(), &mut title_text, title);
+            title_text.push(self.arena(), ' ');
+        }
+        last_node.content = NodeContent::Modal(title_text);
         self.last_modal = Some(self.tree.last_node);
     }
 
@@ -2052,12 +2082,21 @@ impl<'a> Context<'a, '_> {
             unreachable!();
         };
 
+        let len = content.text.len();
+        if let Some(last) = content.chunks.last_mut()
+            && last.offset == len
+        {
+            // No text has this style yet, so change it rather than ignore the
+            // call, e.g. when an attribute was set right before this color.
+            last.fg = fg;
+            return;
+        }
         let last = content.chunks.last().unwrap_or(&INVALID_STYLED_TEXT_CHUNK);
-        if last.offset != content.text.len() && last.fg != fg {
+        if last.fg != fg {
             content.chunks.push(
                 self.arena(),
                 StyledTextChunk {
-                    offset: content.text.len(),
+                    offset: len,
                     fg,
                     attr: last.attr,
                 },
@@ -2072,12 +2111,19 @@ impl<'a> Context<'a, '_> {
             unreachable!();
         };
 
+        let len = content.text.len();
+        if let Some(last) = content.chunks.last_mut()
+            && last.offset == len
+        {
+            last.attr = attr;
+            return;
+        }
         let last = content.chunks.last().unwrap_or(&INVALID_STYLED_TEXT_CHUNK);
-        if last.offset != content.text.len() && last.attr != attr {
+        if last.attr != attr {
             content.chunks.push(
                 self.arena(),
                 StyledTextChunk {
-                    offset: content.text.len(),
+                    offset: len,
                     fg: last.fg,
                     attr,
                 },
@@ -2092,7 +2138,7 @@ impl<'a> Context<'a, '_> {
             unreachable!();
         };
 
-        content.text.push_str(self.arena(), text);
+        push_sanitized(self.arena(), &mut content.text, text);
     }
 
     /// Ends the current label block.
@@ -2319,7 +2365,7 @@ impl<'a> Context<'a, '_> {
 
         // Scrolling works even if the node isn't focused.
         if self.input_scroll_delta != Point::default()
-            && node_prev.inner_clipped.contains(self.tui.mouse_position)
+            && self.tui.was_mouse_hover_on_node(node_prev.id)
         {
             tc.scroll_offset.x += self.input_scroll_delta.x;
             tc.scroll_offset.y += self.input_scroll_delta.y;
@@ -2330,11 +2376,19 @@ impl<'a> Context<'a, '_> {
         {
             let mouse = self.tui.mouse_position;
             let inner = node_prev.inner;
-            let text_rect = Rect {
-                left: inner.left + tb.margin_width(),
+            let select_rect = Rect {
+                left: inner.left,
                 top: inner.top,
+                // Multi-line areas have a 1-column scrollbar on the right.
                 right: inner.right - !single_line as CoordType,
                 bottom: inner.bottom,
+            };
+            let text_rect = Rect {
+                // The text area has a left margin for line numbers.
+                left: select_rect.left + tb.margin_width(),
+                top: select_rect.top,
+                right: select_rect.right,
+                bottom: select_rect.bottom,
             };
             let track_rect = Rect {
                 left: text_rect.right,
@@ -2347,7 +2401,7 @@ impl<'a> Context<'a, '_> {
                 y: mouse.y - inner.top + tc.scroll_offset.y,
             };
 
-            if text_rect.contains(self.tui.mouse_down_position) {
+            if select_rect.contains(self.tui.mouse_down_position) {
                 if self.tui.mouse_is_drag {
                     tb.selection_update_visual(pos);
                     tc.preferred_column = tb.cursor_visual_pos().x;
@@ -2356,14 +2410,19 @@ impl<'a> Context<'a, '_> {
 
                     // If the editor is only 1 line tall we can't possibly scroll up or down.
                     if height >= 2 {
-                        fn calc(min: CoordType, max: CoordType, mouse: CoordType) -> CoordType {
+                        fn calc(
+                            min: CoordType,
+                            max: CoordType,
+                            down: CoordType,
+                            mouse: CoordType,
+                        ) -> CoordType {
                             // Otherwise, the scroll zone is up to 3 lines at the top/bottom.
                             let zone_height = ((max - min) / 2).min(3);
 
                             // The .y positions where the scroll zones begin:
                             // Mouse coordinates above top and below bottom respectively.
-                            let scroll_min = min + zone_height;
-                            let scroll_max = max - zone_height - 1;
+                            let scroll_min = down.min(min + zone_height);
+                            let scroll_max = down.max(max - zone_height - 1);
 
                             // Calculate the delta for scrolling up or down.
                             let delta_min = (mouse - scroll_min).clamp(-zone_height, 0);
@@ -2373,12 +2432,13 @@ impl<'a> Context<'a, '_> {
                             let idx = 3 + delta_min + delta_max;
 
                             const SPEEDS: [CoordType; 7] = [-9, -3, -1, 0, 1, 3, 9];
-                            let idx = idx.clamp(0, SPEEDS.len() as CoordType) as usize;
+                            let idx = idx.clamp(0, SPEEDS.len() as CoordType - 1) as usize;
                             SPEEDS[idx]
                         }
 
-                        let delta_x = calc(text_rect.left, text_rect.right, mouse.x);
-                        let delta_y = calc(text_rect.top, text_rect.bottom, mouse.y);
+                        let down = self.tui.mouse_down_position;
+                        let delta_x = calc(text_rect.left, text_rect.right, down.x, mouse.x);
+                        let delta_y = calc(text_rect.top, text_rect.bottom, down.y, mouse.y);
 
                         tc.scroll_offset.x += delta_x;
                         tc.scroll_offset.y += delta_y;
@@ -2386,6 +2446,17 @@ impl<'a> Context<'a, '_> {
                         if delta_x != 0 || delta_y != 0 {
                             self.tui.read_timeout = time::Duration::from_millis(25);
                         }
+                    }
+                } else if !text_rect.contains(self.tui.mouse_down_position) {
+                    if self.tui.mouse_state == InputMouseState::Left {
+                        let y = if tb.is_word_wrap_enabled() {
+                            tb.cursor_move_to_visual(Point { x: 0, y: pos.y });
+                            tb.cursor_logical_pos().y
+                        } else {
+                            pos.y
+                        };
+                        tb.cursor_move_to_logical(Point { x: 0, y });
+                        tb.selection_update_logical(Point { x: 0, y: y + 1 });
                     }
                 } else {
                     match self.input_mouse_click {
@@ -2455,7 +2526,11 @@ impl<'a> Context<'a, '_> {
                     } else {
                         CursorMovement::Grapheme
                     };
-                    tb.delete(granularity, -1);
+                    if single_line {
+                        tb.delete(granularity, -1);
+                    } else {
+                        tb.backspace_with_auto_unindent(granularity);
+                    }
                 }
                 vk::TAB => {
                     if single_line {
@@ -2759,7 +2834,7 @@ impl<'a> Context<'a, '_> {
                     }
                 }
                 vk::INSERT => match modifiers {
-                    kbmod::SHIFT => tb.paste(self.clipboard_ref()),
+                    kbmod::SHIFT => tb.paste(self.clipboard_ref(), single_line),
                     kbmod::CTRL => tb.copy(self.clipboard_mut()),
                     _ => tb.set_overtype(!tb.is_overtype()),
                 },
@@ -2805,7 +2880,7 @@ impl<'a> Context<'a, '_> {
                     _ => return false,
                 },
                 vk::V => match modifiers {
-                    kbmod::CTRL => tb.paste(self.clipboard_ref()),
+                    kbmod::CTRL => tb.paste(self.clipboard_ref(), single_line),
                     _ => return false,
                 },
                 vk::Y => match modifiers {
@@ -2946,7 +3021,7 @@ impl<'a> Context<'a, '_> {
             let container_rect = prev_container.inner;
 
             if self.input_scroll_delta != Point::default()
-                && container_rect.contains(self.tui.mouse_position)
+                && self.tui.was_mouse_hover_on_subtree(&prev_container)
             {
                 sc.scroll_offset.x += self.input_scroll_delta.x;
                 sc.scroll_offset.y += self.input_scroll_delta.y;
@@ -3267,7 +3342,21 @@ impl<'a> Context<'a, '_> {
             && !contains_focus
             && self.consume_shortcut(kbmod::ALT | InputKey::new(accelerator as u32));
 
+        let button_id = self.tree.last_node.borrow().id;
+
+        if self.button_activated() && self.tui.menubar_toggle_id == button_id {
+            self.tui.menubar_toggle_id = 0;
+            self.toss_focus_up();
+            return false;
+        }
+
         if contains_focus || keyboard_focus {
+            // Arming this only while no button is held keeps the press
+            // that opened the menu from closing it again right away.
+            if self.tui.mouse_state != InputMouseState::Left {
+                self.tui.menubar_toggle_id = button_id;
+            }
+
             self.attr_background_rgba(self.tui.floater_default_bg);
             self.attr_foreground_rgba(self.tui.floater_default_fg);
 
@@ -3389,6 +3478,10 @@ impl<'a> Context<'a, '_> {
     /// Ends the current menubar.
     pub fn menubar_end(&mut self) {
         self.table_end();
+
+        if !self.contains_focus() {
+            self.tui.menubar_toggle_id = 0;
+        }
     }
 
     /// Renders a button label with an optional accelerator character
@@ -3834,6 +3927,49 @@ const INVALID_STYLED_TEXT_CHUNK: StyledTextChunk = StyledTextChunk {
     attr: Attributes::None,
 };
 
+/// Appends `text` to `dst`, made safe to send to the terminal verbatim.
+///
+/// The framebuffer expects no control characters: a raw tab, CR, ESC, ... would
+/// move the terminal cursor instead of filling a cell. Some other characters
+/// are measured differently by terminals than by us. Either misaligns the rest
+/// of the row. Every replacement is as wide as what it replaces (zero-width
+/// ones are dropped), which keeps the width math done by callers valid.
+fn push_sanitized<'a>(arena: &'a Arena, dst: &mut BString<'a>, text: &str) {
+    if text.bytes().all(|b| (0x20..0x7f).contains(&b)) {
+        dst.push_str(arena, text);
+        return;
+    }
+
+    let mut clean = 0;
+    for (i, c) in text.char_indices() {
+        let replacement = match c {
+            // C0 controls map onto the Control Pictures block (␀..␟), DEL onto ␡.
+            '\0'..='\x1f' => char::from_u32(0x2400 + c as u32),
+            '\x7f' => Some('\u{2421}'),
+            // C1 controls have no pictures of their own: use ␦ (substitute).
+            '\u{80}'..='\u{9f}' => Some('\u{2426}'),
+            // One column to us, but glibc's wcwidth() says -1 (unprintable).
+            '\u{2028}' | '\u{2029}' => Some('\u{2424}'),
+            // Zero-width to us, but not to every terminal.
+            '\u{feff}' => None,
+            // Bidi controls: a terminal that implements bidi would reorder the
+            // text, e.g. make "invoice\u{202e}fdp.exe" read as "invoiceexe.pdf".
+            '\u{061c}'
+            | '\u{200e}'
+            | '\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2066}'..='\u{2069}' => None,
+            _ => continue,
+        };
+        dst.push_str(arena, &text[clean..i]);
+        if let Some(r) = replacement {
+            dst.push(arena, r);
+        }
+        clean = i + c.len_utf8();
+    }
+    dst.push_str(arena, &text[clean..]);
+}
+
 /// NOTE: Must not contain items that require drop().
 struct TextContent<'a> {
     text: BString<'a>,
@@ -4184,6 +4320,68 @@ impl<'a> Node<'a> {
                     child.layout_children(clip);
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sanitized(text: &str) -> String {
+        let arena = Arena::new(stdext::MEBI).unwrap();
+        let mut s = BString::empty();
+        push_sanitized(&arena, &mut s, text);
+        s.to_string()
+    }
+
+    #[test]
+    fn push_sanitized_passes_plain_text_through() {
+        assert_eq!(sanitized("plain ascii"), "plain ascii");
+        assert_eq!(sanitized("Привет 中文 ½ é"), "Привет 中文 ½ é");
+    }
+
+    #[test]
+    fn push_sanitized_replaces_controls() {
+        assert_eq!(sanitized("a\tb\rc\x1b[31m\x07\x7f"), "a␉b␍c␛[31m␇␡");
+        assert_eq!(sanitized("x\u{85}y\u{9b}z"), "x␦y␦z");
+        assert_eq!(sanitized("line\u{2028}para\u{2029}"), "line␤para␤");
+    }
+
+    #[test]
+    fn push_sanitized_drops_bom_and_bidi_controls() {
+        assert_eq!(sanitized("\u{feff}***\u{feff}"), "***");
+        assert_eq!(sanitized("invoice\u{202e}fdp.exe"), "invoicefdp.exe");
+        assert_eq!(sanitized("\u{2067}a\u{200f}b\u{2069}"), "ab");
+    }
+
+    #[test]
+    fn push_sanitized_keeps_widths() {
+        use crate::unicode::tables::*;
+
+        let width = |s: &str, ambiguous: usize| -> usize {
+            s.chars()
+                .map(|c| {
+                    ucd_grapheme_cluster_character_width(ucd_grapheme_cluster_lookup(c), ambiguous)
+                })
+                .sum()
+        };
+        let specials = [
+            '\u{61c}', '\u{200e}', '\u{200f}', '\u{2028}', '\u{2029}', '\u{feff}',
+        ];
+        let replaced = ('\0'..='\u{9f}')
+            .chain('\u{202a}'..='\u{202e}')
+            .chain('\u{2066}'..='\u{2069}')
+            .chain(specials)
+            .filter(|c| !(' '..'\x7f').contains(c));
+        for c in replaced {
+            let original = c.to_string();
+            let s = sanitized(&original);
+            assert_ne!(s, original, "U+{:04X} passed through", c as u32);
+            // Placeholders must not be East Asian Ambiguous, or their width
+            // would depend on the terminal.
+            assert_eq!(width(&s, 1), width(&original, 1), "U+{:04X}", c as u32);
+            assert_eq!(width(&s, 2), width(&original, 1), "U+{:04X}", c as u32);
         }
     }
 }

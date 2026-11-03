@@ -3,7 +3,7 @@
 [![CI](https://github.com/kromych/ruf4/actions/workflows/ci.yml/badge.svg)](https://github.com/kromych/ruf4/actions/workflows/ci.yml)
 
 <p align="center">
-  <img src="resources/icons/ruf4.svg" width="128" alt="ruf4 icon">
+  <img src="https://raw.githubusercontent.com/kromych/ruf4/main/resources/icons/ruf4.svg" width="128" alt="ruf4 icon">
 </p>
 
 > NOTE: This is **alpha-quality** software! It _may_ delete and/or corrupt
@@ -21,42 +21,47 @@ This is built in Rust on the TUI framework derived from
 [Microsoft Edit](https://github.com/microsoft/edit). It is an immediate mode TUI,
 very small and just enough.
 
-Runs on Linux, macOS, and Windows. You can download the latest pre-release
-[0.0.8](https://github.com/kromych/ruf4/releases/tag/v0.0.8).
+Runs on Linux, macOS, and Windows. You can download the
+[latest release](https://github.com/kromych/ruf4/releases/latest), or build it
+from crates.io:
 
-If you are a developer, [here](./ReleaseFlow.md) are the gory details and notes on builds/releases.
+```sh
+cargo install ruf4
+```
+
+If you are a developer, [here](https://github.com/kromych/ruf4/blob/main/ReleaseFlow.md) are the gory details and notes on builds/releases.
 ## Screenshots
 
 ### Main view
-![Main view](resources/screenshots/how-it-looks.png)
+![Main view](https://raw.githubusercontent.com/kromych/ruf4/main/resources/screenshots/how-it-looks.png)
 
 ### Quick view for text
 
-![Quick view for text](resources/screenshots/qview-highlight.png)
+![Quick view for text](https://raw.githubusercontent.com/kromych/ruf4/main/resources/screenshots/qview-highlight.png)
 
 ### Quick view for binaries
 
-![Quick view for binaries](resources/screenshots/qview-bin.png)
+![Quick view for binaries](https://raw.githubusercontent.com/kromych/ruf4/main/resources/screenshots/qview-bin.png)
 
 ### Files menu
 
-![Files menu](resources/screenshots/menu-files.png)
+![Files menu](https://raw.githubusercontent.com/kromych/ruf4/main/resources/screenshots/menu-files.png)
 
 ### Commands menu
 
-![Commands menu](resources/screenshots/menu-commands.png)
+![Commands menu](https://raw.githubusercontent.com/kromych/ruf4/main/resources/screenshots/menu-commands.png)
 
 ### Select FS root dialog
 
-![Select root](resources/screenshots/select-root.png)
+![Select root](https://raw.githubusercontent.com/kromych/ruf4/main/resources/screenshots/select-root.png)
 
 ### Directory history dialog
 
-![Directory history](resources/screenshots/history-directory.png)
+![Directory history](https://raw.githubusercontent.com/kromych/ruf4/main/resources/screenshots/history-directory.png)
 
 ### Command history dialog
 
-![Command history](resources/screenshots/history-commands.png)
+![Command history](https://raw.githubusercontent.com/kromych/ruf4/main/resources/screenshots/history-commands.png)
 
 ## Keyboard shortcuts
 
@@ -137,13 +142,16 @@ Mission Control, media, volume). These Ctrl shortcuts work without Fn:
 ### Command line
 
 Type any text to activate the command line at the bottom of the screen.
-Commands run in the active panel's directory.
+Commands run in the active panel's directory. While typing, the most recent
+matching command from the history is suggested in gray after the cursor.
 
 | Key | Action |
 |-----|--------|
-| Enter | Execute command |
+| Enter | Execute command (as typed, without the suggestion) |
 | Escape | Cancel |
 | Backspace | Delete character |
+| Right / End | Accept the suggestion |
+| Ctrl+Right | Accept the next word of the suggestion |
 
 Commands run in the foreground with the terminal handed back to them, so
 interactive programs (a shell, `python`, `vim`, `less`) work normally. The

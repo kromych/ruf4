@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use ruf4::fileops;
 use ruf4::sftp::Attrs;
 use ruf4::vfs::{
-    self, dir_contains, is_remote, join, normalize_posix, parent, parse_remote, remote_entry,
-    same_domain, shell_quote, ssh_config_hosts,
+    self, dir_contains, is_remote, join, join_child, normalize_posix, parent, parse_remote,
+    remote_entry, same_domain, shell_quote, ssh_config_hosts,
 };
 
 fn p(s: &str) -> PathBuf {
@@ -93,6 +93,49 @@ fn join_local_still_joins() {
 }
 
 #[test]
+fn join_child_accepts_plain_names() {
+    let local = Path::new("dest");
+    assert_eq!(join_child(local, "a b.txt").unwrap(), local.join("a b.txt"));
+    assert_eq!(
+        join_child(&p("ssh://box/dir"), "back\\slash:colon").unwrap(),
+        p("ssh://box/dir/back\\slash:colon")
+    );
+}
+
+#[test]
+fn join_child_refuses_names_escaping_the_directory() {
+    // Remote listings can return names like these; joined unchecked they'd
+    // write outside the copy or download destination.
+    let mut hostile = vec!["", ".", "..", "../x", "a/b", "/etc/passwd", "x/"];
+    if cfg!(windows) {
+        hostile.extend([
+            "..\\x",
+            "\\x",
+            "C:\\x",
+            "C:x",
+            "\\\\host\\share\\x",
+            "a:stream",
+            "nul",
+            "NUL.txt",
+            "con .log",
+            "com1",
+            "lpt¹",
+            "trailing.",
+            "trailing ",
+        ]);
+    }
+    for name in hostile {
+        assert!(join_child(Path::new("dest"), name).is_err(), "{name:?}");
+    }
+    for name in ["console.txt", "com10", "nullable", ".hidden", "a.b.c"] {
+        assert!(join_child(Path::new("dest"), name).is_ok(), "{name:?}");
+    }
+    for name in ["", ".", "..", "../x", "a/b", "nul\0"] {
+        assert!(join_child(&p("ssh://box/dir"), name).is_err(), "{name:?}");
+    }
+}
+
+#[test]
 fn parent_remote_chain_ends_at_root() {
     let start = p("ssh://alice@box/a/b");
     let up1 = parent(&start).unwrap();
@@ -114,6 +157,46 @@ fn same_domain_and_same_file_remote() {
     assert!(!same_domain(&a, Path::new("/a/c")));
     assert!(fileops::same_file(&a, &b));
     assert!(!fileops::same_file(&a, &other));
+}
+
+#[test]
+fn endpoint_parses_ssh_g_output() {
+    let text = "user deploy
+hostname Box.Example.COM
+port 2222
+proxyjump none
+                proxycommand ssh -W %h:%p bastion
+identityfile ~/.ssh/id_ed25519
+";
+    let e = vfs::endpoint_from_ssh_g(text).unwrap();
+    assert_eq!(e.hostname, "box.example.com");
+    assert_eq!(e.port, "2222");
+    assert!(e.proxy.contains("bastion") && !e.proxy.contains("none"));
+    assert!(
+        vfs::endpoint_from_ssh_g(
+            "user x
+"
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn same_host_sees_through_spellings() {
+    let host = |s: &str| parse_remote(&p(s)).unwrap().host;
+    // `.invalid` names can't be in anyone's ssh_config.
+    let a = host("ssh://ruf4-a.invalid/x");
+    assert!(vfs::same_host(
+        &a,
+        &host("ssh://someone@RUF4-A.invalid:22/x")
+    ));
+    assert!(!vfs::same_host(&a, &host("ssh://ruf4-a.invalid:2222/x")));
+    assert!(!vfs::same_host(&a, &host("ssh://ruf4-b.invalid/x")));
+    // A move between two spellings of one host is a rename on that host.
+    assert!(same_domain(
+        &p("ssh://ruf4-a.invalid/x"),
+        &p("ssh://root@ruf4-a.invalid/y")
+    ));
 }
 
 #[test]
@@ -267,20 +350,22 @@ fn live_ssh_end_to_end() {
 
     // Work in an isolated subtree.
     let work = join(&root, &format!("ruf4-e2e-{}", std::process::id()));
-    vfs::create_dir_all(&work).expect("mkdir");
+    vfs::create_dir_all(&work, Some(0o700)).expect("mkdir");
     assert!(vfs::is_dir(&work));
+    assert_eq!(vfs::symlink_meta(&work).unwrap().mode, Some(0o700));
 
     // Write, stat, and read back a file crossing the chunk size.
     let file = join(&work, "data.bin");
     let payload: Vec<u8> = (0..100_000).map(|i| (i % 251) as u8).collect();
     {
-        let mut w = vfs::open_write(&file).expect("open for write");
+        let mut w = vfs::open_write(&file, Some(0o600)).expect("open for write");
         w.write_all(&payload).unwrap();
         w.flush().unwrap();
     }
     assert!(vfs::exists(&file));
     let meta = vfs::symlink_meta(&file).unwrap();
     assert_eq!(meta.size, payload.len() as u64);
+    assert_eq!(meta.mode, Some(0o600));
     let (prefix, size) = vfs::read_prefix(&file, 4096).unwrap();
     assert_eq!(size, payload.len() as u64);
     assert_eq!(prefix, payload[..4096]);

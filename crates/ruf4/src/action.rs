@@ -511,7 +511,9 @@ pub fn parse_key_name(s: &str) -> Option<InputKey> {
 /// Build the help text table from the current binding table.
 /// Groups bindings for the same action (e.g. "F3 / Ctrl+Q") and produces
 /// the layout shown in the help dialog.
-pub fn build_help_text(bindings: &[Binding]) -> Vec<(String, &'static str, Action)> {
+/// Help rows: keys, description, and the action a click on the row runs
+/// (none for rows that only describe keys).
+pub fn build_help_text(bindings: &[Binding]) -> Vec<(String, &'static str, Option<Action>)> {
     // Ordered list of actions shown in help, with group separators (None).
     let sections: &[Option<Action>] = &[
         Some(Action::Help),
@@ -557,7 +559,7 @@ pub fn build_help_text(bindings: &[Binding]) -> Vec<(String, &'static str, Actio
     let mut result = Vec::new();
     for entry in sections {
         match entry {
-            None => result.push((String::new(), "", Action::Help)), // separator
+            None => result.push((String::new(), "", None)), // separator
             Some(action) => {
                 let mut keys: Vec<String> = bindings
                     .iter()
@@ -576,15 +578,22 @@ pub fn build_help_text(bindings: &[Binding]) -> Vec<(String, &'static str, Actio
                 } else {
                     keys.join(" / ")
                 };
-                result.push((key_str, action_label(*action), *action));
+                result.push((key_str, action_label(*action), Some(*action)));
             }
         }
     }
-    // Append Alt+letters note (not in binding table; handled specially).
-    result.push((
-        "Alt+letters".to_string(),
-        "Quick search by name",
-        Action::Help,
-    ));
+    // Keys handled outside the binding table.
+    let notes: &[(&str, &'static str)] = &[
+        ("Alt+letters", "Quick search by name"),
+        ("", ""),
+        ("Any text", "Command line: start typing a command"),
+        ("Enter", "Command line: run what's typed"),
+        ("Esc", "Command line: clear it"),
+        ("Right / End", "Command line: accept the history suggestion"),
+        ("Ctrl+Right", "Command line: accept its next word"),
+    ];
+    for &(keys, label) in notes {
+        result.push((keys.to_string(), label, None));
+    }
     result
 }

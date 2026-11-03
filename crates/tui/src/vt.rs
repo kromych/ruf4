@@ -251,17 +251,31 @@ impl<'input> Stream<'_, 'input> {
                         self.off += 1;
 
                         match c {
+                            // The Linux console sends F1 to F5 as `ESC [ [ A` to `ESC [ [ E`.
+                            // No CSI sequence ends in `[`, so treat it like a private byte there.
+                            b'[' if self.parser.csi.private_byte == '\0'
+                                && self.parser.csi.param_count == 0
+                                && self.parser.csi.params[0] == 0 =>
+                            {
+                                self.parser.csi.private_byte = '[';
+                            }
                             0x40..=0x7e => {
                                 self.parser.state = State::Ground;
                                 self.parser.csi.final_byte = c as char;
                                 if self.parser.csi.param_count != 0
                                     || self.parser.csi.params[0] != 0
                                 {
-                                    self.parser.csi.param_count += 1;
+                                    let csi = &mut self.parser.csi;
+                                    csi.param_count = (csi.param_count + 1).min(csi.params.len());
                                 }
                                 return Some(Token::Csi(&self.parser.csi));
                             }
-                            b';' => self.parser.csi.param_count += 1,
+                            // Excess parameters are ignored. `param_count` must not exceed
+                            // `params.len()`, because we and our callers index `params` with it.
+                            b';' => {
+                                let csi = &mut self.parser.csi;
+                                csi.param_count = (csi.param_count + 1).min(csi.params.len());
+                            }
                             b'<'..=b'?' => self.parser.csi.private_byte = c as char,
                             _ => {}
                         }
@@ -364,5 +378,81 @@ impl<'input> Stream<'_, 'input> {
         }
 
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Returns the final byte and parameters of each CSI sequence in `input`.
+    fn parse_csi(parser: &mut Parser, input: &str) -> Vec<(char, Vec<u16>)> {
+        let mut stream = parser.parse(input);
+        let mut res = Vec::new();
+        while let Some(token) = stream.next() {
+            if let Token::Csi(csi) = token {
+                res.push((csi.final_byte, csi.params[..csi.param_count].to_vec()));
+            }
+        }
+        res
+    }
+
+    #[test]
+    fn test_csi_basic() {
+        let mut parser = Parser::new();
+        assert_eq!(
+            parse_csi(&mut parser, "\x1b[A\x1b[5;3H\x1b[;m"),
+            [('A', vec![]), ('H', vec![5, 3]), ('m', vec![0, 0])]
+        );
+    }
+
+    #[test]
+    fn test_csi_too_many_params() {
+        let mut parser = Parser::new();
+
+        // Only empty parameters, in the same input as the following sequence.
+        let input = format!("\x1b[{}m\x1b[A", ";".repeat(40));
+        assert_eq!(
+            parse_csi(&mut parser, &input),
+            [('m', vec![0; 32]), ('A', vec![])]
+        );
+
+        // Non-empty parameters: the first 32 are kept, the rest is ignored.
+        let params: Vec<String> = (1..=40).map(|i| i.to_string()).collect();
+        let input = format!("\x1b[<{}M", params.join(";"));
+        let expected: Vec<u16> = (1..=32).collect();
+        assert_eq!(parse_csi(&mut parser, &input), [('M', expected)]);
+
+        // The next sequence in a separate input still parses.
+        assert_eq!(parse_csi(&mut parser, "\x1b[A"), [('A', vec![])]);
+        assert_eq!(parse_csi(&mut parser, "\x1b[1;2m"), [('m', vec![1, 2])]);
+    }
+
+    /// Returns the private and final byte of each CSI sequence in `input`.
+    fn parse_csi_private(parser: &mut Parser, input: &str) -> Vec<(char, char)> {
+        let mut stream = parser.parse(input);
+        let mut res = Vec::new();
+        while let Some(token) = stream.next() {
+            if let Token::Csi(csi) = token {
+                res.push((csi.private_byte, csi.final_byte));
+            }
+        }
+        res
+    }
+
+    #[test]
+    fn test_csi_linux_console_function_keys() {
+        let mut parser = Parser::new();
+        assert_eq!(
+            parse_csi_private(&mut parser, "\x1b[[A\x1b[[E\x1b[A"),
+            [('[', 'A'), ('[', 'E'), ('\0', 'A')]
+        );
+
+        // Split across reads.
+        assert!(parse_csi_private(&mut parser, "\x1b[").is_empty());
+        assert_eq!(parse_csi_private(&mut parser, "[B"), [('[', 'B')]);
+
+        // Only right after the `[` that starts the sequence.
+        assert_eq!(parse_csi_private(&mut parser, "\x1b[<["), [('<', '[')]);
     }
 }

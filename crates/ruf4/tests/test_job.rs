@@ -209,3 +209,178 @@ fn download_copies_and_overwrites_silently() {
     assert_eq!(fs::read(&src).unwrap(), b"payload");
     cleanup(&root);
 }
+
+#[test]
+fn nested_conflict_prompts_and_skip_keeps_source_on_move() {
+    let root = temp_dir();
+    let src = root.join("proj");
+    fs::create_dir_all(src.join("sub")).unwrap();
+    fs::write(src.join("sub/a.txt"), b"new").unwrap();
+    fs::write(src.join("b.txt"), b"b").unwrap();
+    // The destination already has the folder, with a conflicting nested file.
+    let dst = root.join("dest/proj");
+    fs::create_dir_all(dst.join("sub")).unwrap();
+    fs::write(dst.join("sub/a.txt"), b"old").unwrap();
+
+    let mut prompts = Vec::new();
+    let mut job = job::spawn_copy_move(vec![(src.clone(), dst.clone())], false);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let errors = loop {
+        if let Some(errors) = job.poll() {
+            break errors;
+        }
+        if let Some(name) = job.awaiting_overwrite.clone() {
+            prompts.push(name);
+            job.answer_overwrite(Decision::Skip);
+        }
+        assert!(Instant::now() < deadline, "job did not finish in time");
+        std::thread::sleep(Duration::from_millis(2));
+    };
+
+    assert!(errors.is_empty(), "errors: {errors:?}");
+    assert_eq!(
+        prompts.len(),
+        1,
+        "only the nested file conflicts: {prompts:?}"
+    );
+    assert!(prompts[0].ends_with("a.txt"), "{prompts:?}");
+    assert_eq!(fs::read(dst.join("sub/a.txt")).unwrap(), b"old");
+    assert_eq!(fs::read(dst.join("b.txt")).unwrap(), b"b");
+    // The skipped file stays at the source, with the folders leading to it.
+    assert_eq!(fs::read(src.join("sub/a.txt")).unwrap(), b"new");
+    assert!(!src.join("b.txt").exists());
+    cleanup(&root);
+}
+
+#[test]
+fn overwrite_all_answers_every_later_conflict() {
+    let root = temp_dir();
+    let src = root.join("src");
+    fs::create_dir_all(src.join("sub")).unwrap();
+    fs::write(src.join("a"), b"new").unwrap();
+    fs::write(src.join("sub/b"), b"new").unwrap();
+    let dst = root.join("dst");
+    fs::create_dir_all(dst.join("sub")).unwrap();
+    fs::write(dst.join("a"), b"old").unwrap();
+    fs::write(dst.join("sub/b"), b"old").unwrap();
+
+    let mut prompts = 0;
+    let mut job = job::spawn_copy_move(vec![(src, dst.clone())], true);
+    let errors = drive(&mut job, || {
+        prompts += 1;
+        Decision::OverwriteAll
+    });
+
+    assert!(errors.is_empty(), "errors: {errors:?}");
+    assert_eq!(prompts, 1);
+    assert_eq!(fs::read(dst.join("a")).unwrap(), b"new");
+    assert_eq!(fs::read(dst.join("sub/b")).unwrap(), b"new");
+    cleanup(&root);
+}
+
+#[cfg(unix)]
+#[test]
+fn copy_skips_fifos_instead_of_blocking_on_them() {
+    let root = temp_dir();
+    let src = root.join("src");
+    fs::create_dir(&src).unwrap();
+    fs::write(src.join("plain"), b"x").unwrap();
+    let fifo = std::ffi::CString::new(src.join("pipe").to_str().unwrap()).unwrap();
+    // SAFETY: a valid NUL-terminated path.
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+    let dst = root.join("dst");
+
+    let mut job = job::spawn_copy_move(vec![(src, dst.clone())], true);
+    let errors = drive(&mut job, no_overwrite);
+
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].contains("not a regular file"), "{errors:?}");
+    assert_eq!(fs::read(dst.join("plain")).unwrap(), b"x");
+    assert!(!dst.join("pipe").exists());
+    cleanup(&root);
+}
+
+/// A read-only directory (0555, as in Go's module cache) is copied with its
+/// contents, and ends up with the source's mode.
+#[cfg(unix)]
+#[test]
+fn copy_keeps_read_only_directories_and_their_contents() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // Nothing here may panic before the cleanup below, which needs the
+    // directories writable again.
+    let mode = |p: &Path| Some(fs::metadata(p).ok()?.permissions().mode() & 0o777);
+    let set_mode = |p: &Path, m: u32| fs::set_permissions(p, fs::Permissions::from_mode(m));
+
+    let root = temp_dir();
+    let src = root.join("src");
+    fs::create_dir_all(src.join("sub")).unwrap();
+    fs::write(src.join("a.txt"), b"a").unwrap();
+    fs::write(src.join("sub/b.txt"), b"b").unwrap();
+    set_mode(&src.join("sub"), 0o500).unwrap();
+    set_mode(&src, 0o555).unwrap();
+    let dst = root.join("dst");
+
+    let mut job = job::spawn_copy_move(vec![(src.clone(), dst.clone())], true);
+    let errors = drive(&mut job, no_overwrite);
+
+    let copied = (
+        fs::read(dst.join("a.txt")).ok(),
+        fs::read(dst.join("sub/b.txt")).ok(),
+    );
+    let modes = (mode(&dst), mode(&dst.join("sub")));
+    for dir in [&src, &dst] {
+        let _ = set_mode(dir, 0o755);
+        let _ = set_mode(&dir.join("sub"), 0o755);
+    }
+    cleanup(&root);
+
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(copied, (Some(b"a".to_vec()), Some(b"b".to_vec())));
+    assert_eq!(modes, (Some(0o555), Some(0o500)));
+}
+
+/// Moving `Makefile` and `makefile` from a case-sensitive filesystem onto a
+/// case-insensitive one must not let one replace the other and then delete
+/// both sources. Needs such a pair of filesystems, e.g. under WSL a Linux
+/// temp dir and `RUF4_CASE_INSENSITIVE_DIR=/mnt/c/...`.
+#[test]
+fn move_onto_case_insensitive_destination_keeps_colliding_source() {
+    let Ok(insensitive) = std::env::var("RUF4_CASE_INSENSITIVE_DIR") else {
+        return;
+    };
+    let root = temp_dir();
+    let src = root.join("proj");
+    fs::create_dir(&src).unwrap();
+    fs::write(src.join("Makefile"), b"upper").unwrap();
+    fs::write(src.join("makefile"), b"lower").unwrap();
+    if fs::read(src.join("Makefile")).unwrap() != b"upper" {
+        cleanup(&root);
+        return; // The temp dir isn't case-sensitive either.
+    }
+    let dst_root = PathBuf::from(insensitive).join(format!("ruf4_case_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dst_root);
+    fs::create_dir_all(&dst_root).unwrap();
+    let dst = dst_root.join("proj");
+
+    let mut job = job::spawn_copy_move(vec![(src.clone(), dst.clone())], false);
+    let errors = drive(&mut job, no_overwrite);
+
+    let names: Vec<_> = fs::read_dir(&dst)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    let kept: Vec<_> = fs::read_dir(&src)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    let _ = fs::remove_dir_all(&dst_root);
+    cleanup(&root);
+
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].contains("ignores case"), "{errors:?}");
+    assert_eq!(names.len(), 1, "{names:?}");
+    // Whichever came second is still at the source, the other one moved.
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    assert_ne!(kept[0], names[0]);
+}

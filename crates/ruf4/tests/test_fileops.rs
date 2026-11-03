@@ -1,3 +1,6 @@
+// Copyright (c) 2026 ruf4 contributors.
+// Licensed under the MIT License.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -64,7 +67,7 @@ fn test_ops_delete_nonexistent_returns_error() {
 #[test]
 fn test_ops_build_pairs_single_file_to_path() {
     let src = PathBuf::from("/src/file.txt");
-    let pairs = ops_build_pairs(std::slice::from_ref(&src), "/dst/renamed.txt");
+    let pairs = ops_build_pairs(std::slice::from_ref(&src), Path::new("/dst/renamed.txt"));
 
     assert_eq!(pairs.len(), 1);
     assert_eq!(pairs[0].0, src);
@@ -79,7 +82,7 @@ fn test_ops_build_pairs_multiple_into_dir() {
 
     let src_a = PathBuf::from("/src/a.txt");
     let src_b = PathBuf::from("/src/b.txt");
-    let pairs = ops_build_pairs(&[src_a.clone(), src_b.clone()], dest.to_str().unwrap());
+    let pairs = ops_build_pairs(&[src_a.clone(), src_b.clone()], &dest);
 
     assert_eq!(pairs.len(), 2);
     assert_eq!(pairs[0].1, dest.join("a.txt"));
@@ -284,5 +287,79 @@ fn test_overwrite_existing_file() {
     assert!(errors.is_empty());
     assert_eq!(fs::read_to_string(&dst).unwrap(), "new");
 
+    cleanup(&root);
+}
+
+fn state_in(dir: &Path) -> ruf4::state::State {
+    let other = ruf4::panel::Panel::new(dir.to_path_buf());
+    ruf4::state::State::for_testing(ruf4::panel::Panel::new(dir.to_path_buf()), other)
+}
+
+#[test]
+fn test_rename_refuses_to_replace_existing() {
+    let root = temp_dir();
+    fs::write(root.join("a.txt"), "a").unwrap();
+    fs::write(root.join("b.txt"), "b").unwrap();
+    let mut s = state_in(&root);
+    s.left.cursor = s
+        .left
+        .entries
+        .iter()
+        .position(|e| e.name == "a.txt")
+        .unwrap();
+
+    ruf4::fileops::do_rename(&mut s, "b.txt");
+    assert!(matches!(s.dialog, ruf4::state::Dialog::Error { .. }));
+    assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "a");
+    assert_eq!(fs::read_to_string(root.join("b.txt")).unwrap(), "b");
+    cleanup(&root);
+}
+
+#[test]
+fn test_rename_case_only_change() {
+    let root = temp_dir();
+    fs::write(root.join("a.txt"), "a").unwrap();
+    let mut s = state_in(&root);
+    s.left.cursor = s
+        .left
+        .entries
+        .iter()
+        .position(|e| e.name == "a.txt")
+        .unwrap();
+
+    ruf4::fileops::do_rename(&mut s, "A.txt");
+    assert!(matches!(s.dialog, ruf4::state::Dialog::None));
+    let names: Vec<_> = fs::read_dir(&root)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert_eq!(names, ["A.txt"]);
+    cleanup(&root);
+}
+
+/// A symlink resolves to the same file as its target, but renaming it onto
+/// the target would replace the target with a link to itself.
+#[cfg(unix)]
+#[test]
+fn test_rename_refuses_symlink_onto_its_target() {
+    let root = temp_dir();
+    fs::write(root.join("v2.txt"), "data").unwrap();
+    std::os::unix::fs::symlink("v2.txt", root.join("latest")).unwrap();
+    let mut s = state_in(&root);
+    s.left.cursor = s
+        .left
+        .entries
+        .iter()
+        .position(|e| e.name == "latest")
+        .unwrap();
+
+    ruf4::fileops::do_rename(&mut s, "v2.txt");
+    assert!(matches!(s.dialog, ruf4::state::Dialog::Error { .. }));
+    assert_eq!(fs::read_to_string(root.join("v2.txt")).unwrap(), "data");
+    assert!(
+        fs::symlink_metadata(root.join("latest"))
+            .unwrap()
+            .is_symlink()
+    );
     cleanup(&root);
 }

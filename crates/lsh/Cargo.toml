@@ -1,11 +1,24 @@
 [package]
-name = "lsh"
-version = "0.0.0"
+name = "ruf4-lsh"
+description = "Syntax highlighting definition language for ruf4: compiler, code generator and runtime, derived from Microsoft Edit"
+keywords = ["syntax", "highlighting", "lexer", "regex", "tui"]
+categories = ["parser-implementations", "text-processing"]
+readme = "ReadMe.md"
 
+version.workspace = true
+authors = ["Microsoft Corporation", "ruf4 contributors"]
 edition.workspace = true
+homepage.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
-[dependencies]
-stdext.workspace = true
+[lib]
+name = "lsh"
+
+[features]
+default = ["compiler", "glob"]
+# The compiler and code generator, for build scripts.
+compiler = []
+# Glob matching of file names, for picking a language.
+glob = []

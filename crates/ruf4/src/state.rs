@@ -142,7 +142,7 @@ pub struct State {
     pub dir_history: Vec<PathBuf>,
     pub cmd_history: Vec<String>,
     pub bindings: Vec<Binding>,
-    pub help_text: Vec<(String, &'static str, Action)>,
+    pub help_text: Vec<(String, &'static str, Option<Action>)>,
     pub theme: Theme,
     last_click: Option<(Instant, Point)>,
     /// The active background operation, if any.
@@ -448,14 +448,20 @@ impl State {
                 }
             })
             .collect();
-        let dir = std::env::temp_dir().join("ruf4-remote").join(host_tag);
-        if let Err(e) = std::fs::create_dir_all(&dir) {
-            self.dialog = Dialog::Error {
-                message: format!("Cannot create {}: {e}", dir.display()),
-            };
-            return;
-        }
-        let target = dir.join(name);
+        let target = platform::private_temp_dir("ruf4-remote")
+            .map(|dir| dir.join(host_tag))
+            .and_then(|dir| {
+                std::fs::create_dir_all(&dir).and_then(|()| vfs::join_child(&dir, name))
+            });
+        let target = match target {
+            Ok(target) => target,
+            Err(e) => {
+                self.dialog = Dialog::Error {
+                    message: format!("Cannot download {name}: {e}"),
+                };
+                return;
+            }
+        };
         self.pending_open = Some(target.clone());
         self.start_job(job::spawn_download(src, target));
     }
@@ -793,6 +799,10 @@ impl State {
             self.term_size = *size;
             return false;
         }
+        if let Input::Paste(bytes) = ev {
+            self.paste(bytes);
+            return false;
+        }
         if !matches!(self.dialog, Dialog::None) {
             self.handle_dialog_input(ev);
             return false;
@@ -811,6 +821,37 @@ impl State {
             _ => {}
         }
         false
+    }
+
+    /// Pasted text goes where typing would, but only into text: a paste that
+    /// starts with `+` doesn't select files, and a `y` doesn't answer a
+    /// prompt. Line breaks and other controls become spaces, so a multi-line
+    /// paste can't run more than the one command line it lands in.
+    fn paste(&mut self, bytes: &[u8]) {
+        let text: String = String::from_utf8_lossy(bytes)
+            .trim_end_matches(['\r', '\n'])
+            .chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect();
+        if text.is_empty() || self.menu_active {
+            return;
+        }
+        match self.dialog {
+            Dialog::None => {
+                if !self.command_line_active {
+                    self.command_line_active = true;
+                    self.command_line.clear();
+                    self.cmd_cursor = 0;
+                }
+                self.command_field().insert(&text);
+            }
+            Dialog::MkDir { .. }
+            | Dialog::Rename { .. }
+            | Dialog::Copy { .. }
+            | Dialog::Move { .. }
+            | Dialog::SelectGroup { .. } => self.handle_dialog_input(&Input::Text(&text)),
+            _ => {}
+        }
     }
 
     fn handle_text(&mut self, text: &str) {
@@ -910,6 +951,12 @@ impl State {
             let panel_width = w / 2;
             let clicked_left = pos.x < panel_width;
 
+            // With quick view on, the other half shows the preview, not the
+            // panel underneath it.
+            if self.quick_view && clicked_left != (self.active == ActivePanel::Left) {
+                return;
+            }
+
             if clicked_left && self.active != ActivePanel::Left {
                 self.active = ActivePanel::Left;
             } else if !clicked_left && self.active != ActivePanel::Right {
@@ -935,9 +982,9 @@ impl State {
                 let idx = panel.scroll_offset + entry_row;
                 if idx < panel.entries.len() {
                     panel.cursor = idx;
-                }
-                if is_double {
-                    self.open_or_enter();
+                    if is_double {
+                        self.open_or_enter();
+                    }
                 }
             }
         }
@@ -1040,6 +1087,34 @@ impl State {
         }
     }
 
+    /// History autocompletion: the rest of the most recent command that
+    /// starts with what's typed, offered while the cursor is at the end.
+    pub fn cmd_suggestion(&self) -> Option<&str> {
+        let typed = self.command_line.as_str();
+        if typed.is_empty() || self.cmd_cursor != typed.chars().count() {
+            return None;
+        }
+        self.cmd_history
+            .iter()
+            .find_map(|cmd| cmd.strip_prefix(typed).filter(|rest| !rest.is_empty()))
+    }
+
+    /// Take over the whole suggestion, or just its next word. False if there
+    /// is none.
+    fn accept_suggestion(&mut self, whole: bool) -> bool {
+        let Some(rest) = self.cmd_suggestion() else {
+            return false;
+        };
+        let len = if whole {
+            rest.len()
+        } else {
+            next_word_end(rest)
+        };
+        let accepted = rest[..len].to_string();
+        self.command_field().insert(&accepted);
+        true
+    }
+
     fn handle_command_line_input(&mut self, ev: &Input) -> bool {
         match ev {
             Input::Text(text) => {
@@ -1053,12 +1128,15 @@ impl State {
                     self.command_line.clear();
                     self.cmd_cursor = 0;
                 } else if key == vk::RETURN {
+                    // Runs what's typed, not the suggestion.
                     if !self.command_line.is_empty() {
                         fileops::execute_command(self);
                     }
                     self.command_line_active = false;
                     self.cmd_cursor = 0;
-                } else if key == vk::BACK && self.cmd_cursor > 0 {
+                } else if key == vk::BACK {
+                    // At the start of the line this does nothing, rather than
+                    // falling through to the panel (parent directory).
                     self.command_field().backspace();
                     if self.command_line.is_empty() {
                         self.command_line_active = false;
@@ -1071,11 +1149,17 @@ impl State {
                 } else if key == vk::LEFT {
                     self.command_field().left();
                 } else if key == vk::RIGHT {
-                    self.command_field().right();
+                    if !self.accept_suggestion(true) {
+                        self.command_field().right();
+                    }
                 } else if key == vk::HOME {
                     self.command_field().home();
                 } else if key == vk::END {
-                    self.command_field().end();
+                    if !self.accept_suggestion(true) {
+                        self.command_field().end();
+                    }
+                } else if key == kbmod::CTRL | vk::RIGHT && self.cmd_suggestion().is_some() {
+                    self.accept_suggestion(false);
                 } else {
                     // Tab, Up, Down, function keys -- let them fall through.
                     return false;
@@ -1113,13 +1197,27 @@ impl State {
         }
     }
 
-    /// Progress dialog: the only interaction is cancellation.
+    /// Progress dialog: the only interaction is cancellation. A worker stuck in
+    /// a blocking call (a dead network share, a hung remote) can't see the
+    /// request, so asking again abandons it rather than leaving the UI locked.
     fn handle_progress_dialog(&mut self, ev: &Input) {
         let cancel = matches!(ev, Input::Keyboard(key) if *key == vk::ESCAPE)
             || matches!(ev, Input::Text("c" | "C"));
-        if cancel && let Some(j) = self.job.as_mut() {
-            j.cancel();
+        let Some(job) = self.job.as_mut().filter(|_| cancel) else {
+            return;
+        };
+        if !job.cancelling {
+            job.cancel();
+            return;
         }
+        let kind = job.kind;
+        // Dropping the job detaches the thread; it stops at its next check.
+        self.job = None;
+        self.pending_open = None;
+        let note = "Stopped waiting for the operation, which isn't responding. \
+                    It may still be working in the background."
+            .to_string();
+        self.complete_job(kind, vec![note], true);
     }
 
     fn handle_dismiss_dialog(&mut self, ev: &Input) {
@@ -1293,9 +1391,12 @@ impl State {
                 return;
             };
             let is_double = detect_double_click(&mut self.last_click, mouse.position);
-            if let Some(idx) =
-                list_dialog_hit_index(mouse.position.y, labels.len(), self.term_size.height)
-            {
+            if let Some(idx) = list_dialog_hit_index(
+                mouse.position.y,
+                labels.len(),
+                *cursor,
+                self.term_size.height,
+            ) {
                 *cursor = idx;
                 if is_double {
                     self.commit_list_select();
@@ -1407,11 +1508,9 @@ impl State {
     }
 
     fn invoke_help_action(&mut self, idx: usize) {
-        if let Some((key_str, _, action)) = self.help_text.get(idx) {
-            if key_str.is_empty() {
-                return; // separator row
-            }
-            self.execute_action(*action);
+        // Separators and rows that only describe keys have no action.
+        if let Some(&(_, _, Some(action))) = self.help_text.get(idx) {
+            self.execute_action(action);
         }
     }
 }
@@ -1484,6 +1583,15 @@ impl TextField<'_> {
     }
 }
 
+/// Byte length of `s` through the end of its first word, including any
+/// whitespace before it, like Ctrl+Right in a shell.
+fn next_word_end(s: &str) -> usize {
+    let start = s.len() - s.trim_start().len();
+    s[start..]
+        .find(char::is_whitespace)
+        .map_or(s.len(), |i| start + i)
+}
+
 fn push_recent<T: PartialEq>(list: &mut Vec<T>, item: T) {
     list.retain(|x| x != &item);
     list.insert(0, item);
@@ -1510,19 +1618,34 @@ fn list_nav_key(key: InputKey, cursor: &mut usize, len: usize) {
     }
 }
 
+/// Rows of entries a list dialog has room for: its height is clamped to the
+/// terminal, so a long list scrolls. Drawing and hit-testing share this.
+pub fn list_dialog_rows(entry_count: usize, term_height: CoordType) -> usize {
+    let content_h = (entry_count as CoordType + LIST_DIALOG_CONTENT_PAD).min(term_height - 4);
+    (content_h - 3).max(0) as usize
+}
+
+/// First entry a list dialog shows: just enough scrolling to keep the cursor
+/// in view.
+pub fn list_dialog_scroll(cursor: usize, rows: usize) -> usize {
+    (cursor + 1).saturating_sub(rows)
+}
+
 pub fn list_dialog_hit_index(
     mouse_y: CoordType,
     entry_count: usize,
+    cursor: usize,
     term_height: CoordType,
 ) -> Option<usize> {
-    let h = entry_count as CoordType + LIST_DIALOG_CONTENT_PAD + LIST_DIALOG_BORDER;
-    let dialog_top = (term_height - h) / 2;
-    let entry_start = dialog_top + LIST_DIALOG_ENTRY_OFFSET;
-    if mouse_y >= entry_start && ((mouse_y - entry_start) as usize) < entry_count {
-        Some((mouse_y - entry_start) as usize)
-    } else {
-        None
+    let content_h = (entry_count as CoordType + LIST_DIALOG_CONTENT_PAD).min(term_height - 4);
+    let dialog_top = (term_height - content_h - LIST_DIALOG_BORDER) / 2;
+    let row = mouse_y - (dialog_top + LIST_DIALOG_ENTRY_OFFSET);
+    let rows = list_dialog_rows(entry_count, term_height);
+    if row < 0 || row as usize >= rows {
+        return None;
     }
+    let idx = list_dialog_scroll(cursor, rows) + row as usize;
+    (idx < entry_count).then_some(idx)
 }
 
 /// Help dialog has no prompt line. Layout:

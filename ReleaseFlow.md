@@ -4,7 +4,7 @@
 
 ### Prerequisites
 
-- [Rust](https://rustup.rs/) 1.93 or later
+- [Rust](https://rustup.rs/) 1.96 or later (the workspace `rust-version`)
 
 ### Native build
 
@@ -98,6 +98,56 @@ GitHub repository secrets.
 
 Signing is skipped when secrets are not configured (PRs, forks without credentials).
 
+## Publishing to crates.io
+
+All four workspace crates are published. The `stdext` and `lsh` names were
+already taken on crates.io, so the packages are named `ruf4-stdext` and
+`ruf4-lsh` while their libraries keep the short names (`[lib] name`), which is
+why the source still says `use stdext::...` and `use lsh::...`.
+
+| Package | Library | Contents |
+|---------|---------|----------|
+| `ruf4` | `ruf4` + `ruf4` binary | the file commander |
+| `ruf4-tui` | `ruf4_tui` | TUI framework |
+| `ruf4-lsh` | `lsh` | syntax highlighting compiler/runtime + `definitions/` |
+| `ruf4-stdext` | `stdext` | arenas, collections, SIMD, Unicode |
+
+The version lives once in `[workspace.package]` and every crate inherits it;
+bump it there (and in `resources/windows/ruf4.rc`) before releasing.
+
+Dry run the whole workspace first — this packages each crate and builds it from
+its own tarball, with the sibling tarballs standing in for the registry:
+
+```sh
+cargo package --workspace
+```
+
+Then publish bottom-up, since each crate must already be on crates.io before
+its dependents can be verified:
+
+```sh
+cargo publish -p ruf4-stdext
+cargo publish -p ruf4-lsh
+cargo publish -p ruf4-tui
+cargo publish -p ruf4
+```
+
+Note that `ruf4`'s build script embeds the Windows icon and version resource
+from `resources/windows/ruf4.rc`, which lives outside the package directory and
+is therefore not part of the published tarball. Binaries built by `cargo install
+ruf4` on Windows have no icon or version info; the GitHub release builds, which
+build from a checkout, do.
+
+## Syncing with Microsoft Edit
+
+`stdext`, `tui` and `lsh` are derived from
+[Microsoft Edit](https://github.com/microsoft/edit) and were last synced with
+its commit `b7f8322` (2026-11-02). Upstream keeps the `stdext` and `tui` code
+in its `edit` crate (`crates/edit/src`), while `lsh` is its own crate there too.
+To sync again, 3-way merge upstream's changes since that commit into the
+corresponding files here, formatting upstream's files with ruf4's default
+`rustfmt` settings first, so that only real changes conflict.
+
 ## Supported platforms
 
 | Platform | Architecture | Status |
@@ -117,9 +167,10 @@ Pushing to `main` or opening a PR runs:
 - Release builds on all platform/arch combinations (Windows binaries are Azure-signed when secrets are configured)
 
 Pushing a version tag (e.g. `git tag v0.1.0 && git push --tags`) triggers a release workflow that:
+- Checks that the tag is `v` followed by the version in `Cargo.toml`, which is what `ruf4 --version` reports
 - Builds release binaries for all platforms
 - Signs and notarizes the macOS builds (if Apple credentials are configured)
-- Packages as `.tar.gz` (Linux/macOS) or `.zip` (Windows)
+- Packages as `.tar.gz` (Linux/macOS) or `.zip` (Windows), named after the tag (e.g. `ruf4-v0.1.0-linux-x86_64.tar.gz`)
 - Creates a GitHub release with all archives
 
 Here's how re-create the tag and the release for a failed release flow:

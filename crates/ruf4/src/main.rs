@@ -38,7 +38,31 @@ impl Drop for TerminalGuard {
     }
 }
 
+const USAGE: &str = "\
+Usage: ruf4 [OPTIONS]
+
+A dual-panel file commander for the terminal.
+
+Options:
+  -h, --help     Print this help and exit
+  -V, --version  Print the version and exit
+";
+
 fn main() -> ExitCode {
+    // Before anything touches the terminal, so that these print normally.
+    if let Some(arg) = std::env::args_os().nth(1) {
+        match arg.to_str() {
+            Some("-h" | "--help") => print!("{USAGE}"),
+            Some("-V" | "-v" | "--version") => println!("ruf4 {}", env!("CARGO_PKG_VERSION")),
+            _ => {
+                eprintln!("ruf4: unknown argument: {}", arg.display());
+                eprintln!("Try 'ruf4 --help'.");
+                return ExitCode::from(2);
+            }
+        }
+        return ExitCode::SUCCESS;
+    }
+
     if let Err(e) = run() {
         eprintln!("ruf4: {e}");
         return ExitCode::FAILURE;
@@ -47,13 +71,22 @@ fn main() -> ExitCode {
 }
 
 fn run() -> std::io::Result<()> {
-    let _sys_deinit = sys::init();
+    let _sys_deinit = sys::init()?;
     arena::init(SCRATCH_ARENA_CAPACITY)?;
-    sys::switch_modes()?;
+    let size = sys::switch_modes()?;
 
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        sys::write_stdout(platform::TUI_LEAVE_SEQ);
+        // Hand the terminal back if this panic ends the process. A worker
+        // thread unwinding (debug builds) doesn't: its job reports the failure
+        // and the UI carries on.
+        if cfg!(panic = "abort") || std::thread::current().name() == Some("main") {
+            sys::write_stdout(platform::TUI_LEAVE_SEQ);
+            // With `panic = "abort"`, `_sys_deinit` never gets dropped. Leave raw
+            // mode here instead, which also lets the message below print in
+            // cooked mode.
+            sys::restore_modes();
+        }
         default_hook(info);
     }));
 
@@ -62,10 +95,12 @@ fn run() -> std::io::Result<()> {
     let mut vt_parser = vt::Parser::new();
     let mut input_parser = input::Parser::new();
     let mut tui = Tui::new()?;
+    tui.set_size(size);
     let mut state = state::State::new();
     tui.set_floater_default_bg(tui.indexed(state.theme.floater_bg));
     tui.set_floater_default_fg(tui.indexed(state.theme.floater_fg));
 
+    // The state learns the size the same way as any later change: from a resize event.
     sys::inject_window_size_into_stdin();
 
     loop {
@@ -82,13 +117,16 @@ fn run() -> std::io::Result<()> {
             .min(Duration::from_secs(1))
             .min(job_timeout);
 
-        let input = match sys::read_stdin(&scratch, read_timeout) {
-            Some(input) => input,
+        let (resize, input) = match sys::read_stdin(&scratch, read_timeout) {
+            Some(read) => read,
             None => break, // EOF or error
         };
 
         let vt_stream = vt_parser.parse(&input);
-        let input_iter = input_parser.parse(vt_stream);
+        let input_iter = resize
+            .map(input::Input::Resize)
+            .into_iter()
+            .chain(input_parser.parse(vt_stream));
 
         for ev in input_iter {
             if state.handle_global_input(&ev) {

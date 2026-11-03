@@ -23,34 +23,45 @@ jobs:
           - name: linux-x86_64
             os: ubuntu-latest
             binary: ruf4
-            archive: ruf4-linux-x86_64.tar.gz
+            archive: ruf4-${{ github.ref_name }}-linux-x86_64.tar.gz
             archive_type: tar
           - name: linux-aarch64
             os: ubuntu-24.04-arm
             binary: ruf4
-            archive: ruf4-linux-aarch64.tar.gz
+            archive: ruf4-${{ github.ref_name }}-linux-aarch64.tar.gz
             archive_type: tar
           - name: macos-aarch64
             os: macos-latest
             binary: ruf4
-            archive: ruf4-macos-aarch64.tar.gz
+            archive: ruf4-${{ github.ref_name }}-macos-aarch64.tar.gz
             archive_type: tar
             sign: true
           - name: windows-x86_64
             os: windows-latest
             binary: ruf4.exe
-            archive: ruf4-windows-x86_64.zip
+            archive: ruf4-${{ github.ref_name }}-windows-x86_64.zip
             archive_type: zip
           - name: windows-aarch64
             os: windows-11-arm
             binary: ruf4.exe
-            archive: ruf4-windows-aarch64.zip
+            archive: ruf4-${{ github.ref_name }}-windows-aarch64.zip
             archive_type: zip
 
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+
+      # `ruf4 --version` reports the crate version, so it has to match the tag.
+      - name: Check the version
+        if: matrix.name == 'linux-x86_64'
+        run: |
+          version=$(cargo pkgid -p ruf4 | sed 's/.*[#@]//')
+          if [ "v$version" != "${{ github.ref_name }}" ]; then
+            echo "::error::Tag ${{ github.ref_name }} doesn't match the version in Cargo.toml ($version)"
+            exit 1
+          fi
+
       - run: cargo build --release
 
       # --- macOS: build .app bundle, sign, and notarize ---

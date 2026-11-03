@@ -1,11 +1,15 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+//
+// Portions derived from the Microsoft Edit project (https://github.com/microsoft/edit).
+// See LICENSE-EDIT for the original MIT license.
+
 mod definitions;
 
 use std::path::Path;
 
+use lsh::glob::glob_match;
 use lsh::runtime::{Highlight, Language, Runtime};
-use stdext::arena::Arena;
-use stdext::collections::BVec;
-use stdext::glob::glob_match;
 
 pub use definitions::{ASSEMBLY, CHARSETS, FILE_ASSOCIATIONS, HighlightKind, LANGUAGES, STRINGS};
 
@@ -19,16 +23,14 @@ pub fn detect_language(path: &Path) -> Option<&'static Language> {
     None
 }
 
-pub fn highlight_lines<'a>(
-    arena: &'a Arena,
-    language: &Language,
-    lines: &[&[u8]],
-) -> BVec<'a, BVec<'a, Highlight<HighlightKind>>> {
+pub fn highlight_lines(language: &Language, lines: &[&[u8]]) -> Vec<Vec<Highlight<HighlightKind>>> {
     let mut runtime = Runtime::new(&ASSEMBLY, &STRINGS, &CHARSETS, language.entrypoint);
-    let mut result = BVec::empty();
-    for line in lines {
-        let highlights = runtime.parse_next_line::<HighlightKind>(arena, line);
-        result.push(arena, highlights);
-    }
-    result
+    lines
+        .iter()
+        .map(|line| {
+            let mut highlights = Vec::new();
+            runtime.parse_next_line(line, &mut highlights);
+            highlights
+        })
+        .collect()
 }

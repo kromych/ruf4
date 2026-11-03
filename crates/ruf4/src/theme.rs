@@ -45,6 +45,8 @@ pub struct Theme {
     pub pathbar_path_active: IndexedColor,
     pub pathbar_command: IndexedColor,
     pub pathbar_search: IndexedColor,
+    /// History suggestion after the command line cursor.
+    pub pathbar_suggestion: IndexedColor,
     pub pathbar_prompt: IndexedColor,
     pub pathbar_prompt_root: IndexedColor,
 
@@ -77,6 +79,10 @@ pub struct Theme {
     pub floater_bg: IndexedColor,
     pub floater_fg: IndexedColor,
 
+    // ── Scrollbars ─────────────────────────────────────────────────────
+    pub scrollbar_track: IndexedColor,
+    pub scrollbar_thumb: IndexedColor,
+
     // ── Syntax highlight ───────────────────────────────────────────────
     pub hl_comment: IndexedColor,
     pub hl_string: IndexedColor,
@@ -85,6 +91,8 @@ pub struct Theme {
     pub hl_constant: IndexedColor,
     pub hl_method: IndexedColor,
     pub hl_variable: IndexedColor,
+    /// Types and annotations.
+    pub hl_type: IndexedColor,
     pub hl_markup_heading: IndexedColor,
     pub hl_markup_bold: IndexedColor,
     pub hl_markup_italic: IndexedColor,
@@ -171,6 +179,7 @@ pub const THEME_FIELDS: &[&str] = &[
     "pathbar_path_active",
     "pathbar_command",
     "pathbar_search",
+    "pathbar_suggestion",
     "pathbar_prompt",
     "pathbar_prompt_root",
     "clock_bg",
@@ -194,6 +203,8 @@ pub const THEME_FIELDS: &[&str] = &[
     "dialog_shell_scroll_info",
     "floater_bg",
     "floater_fg",
+    "scrollbar_track",
+    "scrollbar_thumb",
     "hl_comment",
     "hl_string",
     "hl_keyword",
@@ -201,6 +212,7 @@ pub const THEME_FIELDS: &[&str] = &[
     "hl_constant",
     "hl_method",
     "hl_variable",
+    "hl_type",
     "hl_markup_heading",
     "hl_markup_bold",
     "hl_markup_italic",
@@ -241,6 +253,7 @@ impl Theme {
             "pathbar_path_active" => self.pathbar_path_active,
             "pathbar_command" => self.pathbar_command,
             "pathbar_search" => self.pathbar_search,
+            "pathbar_suggestion" => self.pathbar_suggestion,
             "pathbar_prompt" => self.pathbar_prompt,
             "pathbar_prompt_root" => self.pathbar_prompt_root,
             "clock_bg" => self.clock_bg,
@@ -264,6 +277,8 @@ impl Theme {
             "dialog_shell_scroll_info" => self.dialog_shell_scroll_info,
             "floater_bg" => self.floater_bg,
             "floater_fg" => self.floater_fg,
+            "scrollbar_track" => self.scrollbar_track,
+            "scrollbar_thumb" => self.scrollbar_thumb,
             "hl_comment" => self.hl_comment,
             "hl_string" => self.hl_string,
             "hl_keyword" => self.hl_keyword,
@@ -271,6 +286,7 @@ impl Theme {
             "hl_constant" => self.hl_constant,
             "hl_method" => self.hl_method,
             "hl_variable" => self.hl_variable,
+            "hl_type" => self.hl_type,
             "hl_markup_heading" => self.hl_markup_heading,
             "hl_markup_bold" => self.hl_markup_bold,
             "hl_markup_italic" => self.hl_markup_italic,
@@ -312,6 +328,7 @@ impl Theme {
             "pathbar_path_active" => self.pathbar_path_active = color,
             "pathbar_command" => self.pathbar_command = color,
             "pathbar_search" => self.pathbar_search = color,
+            "pathbar_suggestion" => self.pathbar_suggestion = color,
             "pathbar_prompt" => self.pathbar_prompt = color,
             "pathbar_prompt_root" => self.pathbar_prompt_root = color,
             "clock_bg" => self.clock_bg = color,
@@ -335,6 +352,8 @@ impl Theme {
             "dialog_shell_scroll_info" => self.dialog_shell_scroll_info = color,
             "floater_bg" => self.floater_bg = color,
             "floater_fg" => self.floater_fg = color,
+            "scrollbar_track" => self.scrollbar_track = color,
+            "scrollbar_thumb" => self.scrollbar_thumb = color,
             "hl_comment" => self.hl_comment = color,
             "hl_string" => self.hl_string = color,
             "hl_keyword" => self.hl_keyword = color,
@@ -342,6 +361,7 @@ impl Theme {
             "hl_constant" => self.hl_constant = color,
             "hl_method" => self.hl_method = color,
             "hl_variable" => self.hl_variable = color,
+            "hl_type" => self.hl_type = color,
             "hl_markup_heading" => self.hl_markup_heading = color,
             "hl_markup_bold" => self.hl_markup_bold = color,
             "hl_markup_italic" => self.hl_markup_italic = color,
@@ -393,6 +413,7 @@ impl Theme {
             pathbar_path_active: IndexedColor::BrightWhite,
             pathbar_command: IndexedColor::BrightWhite,
             pathbar_search: IndexedColor::BrightYellow,
+            pathbar_suggestion: IndexedColor::BrightBlack,
             pathbar_prompt: IndexedColor::White,
             pathbar_prompt_root: IndexedColor::BrightRed,
 
@@ -425,6 +446,10 @@ impl Theme {
             floater_bg: IndexedColor::Cyan,
             floater_fg: IndexedColor::Black,
 
+            // Scrollbars, colored like Microsoft Edit's.
+            scrollbar_track: IndexedColor::BrightBlack,
+            scrollbar_thumb: IndexedColor::BrightWhite,
+
             // Syntax highlighting
             hl_comment: IndexedColor::BrightBlack,
             hl_string: IndexedColor::Green,
@@ -433,6 +458,7 @@ impl Theme {
             hl_constant: IndexedColor::BrightMagenta,
             hl_method: IndexedColor::BrightGreen,
             hl_variable: IndexedColor::Cyan,
+            hl_type: IndexedColor::BrightWhite,
             hl_markup_heading: IndexedColor::BrightYellow,
             hl_markup_bold: IndexedColor::BrightWhite,
             hl_markup_italic: IndexedColor::White,
@@ -452,11 +478,14 @@ impl Theme {
         match kind {
             HighlightKind::Comment => self.hl_comment,
             HighlightKind::String => self.hl_string,
-            HighlightKind::KeywordControl | HighlightKind::KeywordOther => self.hl_keyword,
+            HighlightKind::KeywordControl
+            | HighlightKind::KeywordOther
+            | HighlightKind::KeywordPreprocessor => self.hl_keyword,
             HighlightKind::ConstantNumeric => self.hl_number,
             HighlightKind::ConstantLanguage => self.hl_constant,
             HighlightKind::Method => self.hl_method,
             HighlightKind::Variable => self.hl_variable,
+            HighlightKind::StorageAnnotation | HighlightKind::StorageType => self.hl_type,
             HighlightKind::MarkupHeading => self.hl_markup_heading,
             HighlightKind::MarkupBold => self.hl_markup_bold,
             HighlightKind::MarkupItalic => self.hl_markup_italic,

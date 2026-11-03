@@ -1,3 +1,6 @@
+// Copyright (c) 2026 ruf4 contributors.
+// Licensed under the MIT License.
+
 // Stub clipboard module needed by tui.rs.
 
 #[derive(Default)]

@@ -148,3 +148,20 @@ fn help_lists_show_user_screen_with_its_key() {
         *label == action_label(Action::ShowUserScreen) && keys.contains("Ctrl+O")
     }));
 }
+
+#[test]
+fn help_describes_command_line_keys_without_actions() {
+    let help = build_help_text(&default_bindings());
+    let command_line: Vec<_> = help
+        .iter()
+        .filter(|(_, label, _)| label.starts_with("Command line:"))
+        .collect();
+    let keys: Vec<&str> = command_line.iter().map(|(k, _, _)| k.as_str()).collect();
+    assert_eq!(
+        keys,
+        ["Any text", "Enter", "Esc", "Right / End", "Ctrl+Right"]
+    );
+    assert!(command_line.iter().all(|(_, _, action)| action.is_none()));
+    // Rows for bound actions still run them when clicked.
+    assert!(help.iter().any(|(_, _, a)| *a == Some(Action::Copy)));
+}

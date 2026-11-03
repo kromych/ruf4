@@ -24,7 +24,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime};
@@ -92,6 +92,14 @@ impl HostSpec {
             "ClearAllForwardings=yes".into(),
             "-o".into(),
             "ForwardX11=no".into(),
+            // Panel I/O blocks the UI, so a dead link (sleep, VPN drop) must
+            // fail within a minute instead of waiting on TCP for hours.
+            "-o".into(),
+            "ConnectTimeout=20".into(),
+            "-o".into(),
+            "ServerAliveInterval=15".into(),
+            "-o".into(),
+            "ServerAliveCountMax=4".into(),
         ]);
         if let Some(port) = self.port {
             args.push("-p".into());
@@ -215,6 +223,50 @@ pub fn join(dir: &Path, name: &str) -> PathBuf {
         }
         None => dir.join(name),
     }
+}
+
+/// Like [`join`], for a `name` taken from a directory listing: refuses names
+/// that aren't a single plain component of `dir`. A remote (POSIX) name can
+/// contain anything but `/` and NUL, which a hostile server doesn't even need
+/// to honor. Joined onto a local Windows path, `..\x`, `\x` and `C:\x` would
+/// escape `dir`, `a:b` would write to an alternate data stream, `nul` to a
+/// device, and `a.` (trailing dots and spaces get stripped) to `a`.
+pub fn join_child(dir: &Path, name: &str) -> io::Result<PathBuf> {
+    let valid = if is_remote(dir) {
+        !matches!(name, "" | "." | "..") && !name.contains(['/', '\0'])
+    } else {
+        let mut components = Path::new(name).components();
+        matches!(components.next(), Some(Component::Normal(c)) if c == name)
+            && components.next().is_none()
+            && !(cfg!(windows) && (name.contains(':') || is_windows_reserved(name)))
+    };
+    if !valid {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid file name for {}: {name:?}", dir.display()),
+        ));
+    }
+    Ok(join(dir, name))
+}
+
+/// Whether Win32 would not map `name` onto a file of that name: device names
+/// such as `CON` or `nul.txt`, and names ending in a dot or space.
+fn is_windows_reserved(name: &str) -> bool {
+    const DEVICES: &[&str] = &["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"];
+    let stem = name.split('.').next().unwrap_or_default().trim_end();
+    let numbered = |prefix: &str| {
+        let mut digit = stem.get(3..).unwrap_or_default().chars();
+        stem.get(..3)
+            .is_some_and(|p| p.eq_ignore_ascii_case(prefix))
+            && matches!(
+                (digit.next(), digit.next()),
+                (Some('0'..='9' | '¹' | '²' | '³'), None)
+            )
+    };
+    name.ends_with(['.', ' '])
+        || DEVICES.iter().any(|d| stem.eq_ignore_ascii_case(d))
+        || numbered("COM")
+        || numbered("LPT")
 }
 
 /// Parent directory, dispatching on scheme. Remote roots (and `/`) have none.
@@ -432,6 +484,23 @@ pub fn ensure_host(path: &Path) -> Result<(), String> {
     }
 }
 
+/// Substitute the remote home directory for the empty path of `ssh://host`,
+/// which would otherwise act as `/` once joined with a name. Other paths are
+/// returned as is.
+pub fn with_remote_home(path: &Path) -> io::Result<PathBuf> {
+    match parse_remote(path) {
+        Some(r) if r.path.is_empty() => {
+            let home = with_conn(&r.host, |c| c.realpath("."))?;
+            Ok(RemotePath {
+                host: r.host,
+                path: normalize_posix(&home),
+            }
+            .to_path_buf())
+        }
+        _ => Ok(path.to_path_buf()),
+    }
+}
+
 // ── Navigation ──────────────────────────────────────────────────────────────
 
 /// Resolve `path` to a directory the panel can show. Local paths are
@@ -589,12 +658,17 @@ pub enum Kind {
     File,
     Dir,
     Symlink,
+    /// A FIFO, socket or device: opening one can block indefinitely, and its
+    /// "contents" aren't a file's.
+    Other,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct Meta {
     pub kind: Kind,
     pub size: u64,
+    /// Permission bits (`0o777`), where the filesystem has them.
+    pub mode: Option<u32>,
 }
 
 fn meta_from_attrs(attrs: &sftp::Attrs) -> Meta {
@@ -602,12 +676,40 @@ fn meta_from_attrs(attrs: &sftp::Attrs) -> Meta {
         Kind::Symlink
     } else if attrs.is_dir() {
         Kind::Dir
+    } else if attrs.is_special() {
+        Kind::Other
     } else {
         Kind::File
     };
     Meta {
         kind,
         size: attrs.size.unwrap_or(0),
+        mode: attrs.permissions.map(|p| p & 0o777),
+    }
+}
+
+fn local_kind(ft: fs::FileType) -> Kind {
+    if ft.is_symlink() {
+        Kind::Symlink
+    } else if ft.is_dir() {
+        Kind::Dir
+    } else if ft.is_file() {
+        Kind::File
+    } else {
+        Kind::Other
+    }
+}
+
+fn local_mode(meta: &fs::Metadata) -> Option<u32> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        Some(meta.permissions().mode() & 0o777)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        None
     }
 }
 
@@ -617,17 +719,25 @@ pub fn symlink_meta(path: &Path) -> io::Result<Meta> {
         Some(r) => with_conn(&r.host, |c| Ok(meta_from_attrs(&c.lstat(&r.path)?))),
         None => {
             let meta = fs::symlink_metadata(path)?;
-            let ft = meta.file_type();
-            let kind = if ft.is_symlink() {
-                Kind::Symlink
-            } else if ft.is_dir() {
-                Kind::Dir
-            } else {
-                Kind::File
-            };
             Ok(Meta {
-                kind,
+                kind: local_kind(meta.file_type()),
                 size: meta.len(),
+                mode: local_mode(&meta),
+            })
+        }
+    }
+}
+
+/// stat-style metadata (symlinks are followed).
+pub fn stat_meta(path: &Path) -> io::Result<Meta> {
+    match parse_remote(path) {
+        Some(r) => with_conn(&r.host, |c| Ok(meta_from_attrs(&c.stat(&r.path)?))),
+        None => {
+            let meta = fs::metadata(path)?;
+            Ok(Meta {
+                kind: local_kind(meta.file_type()),
+                size: meta.len(),
+                mode: local_mode(&meta),
             })
         }
     }
@@ -651,15 +761,60 @@ pub fn is_dir(path: &Path) -> bool {
     }
 }
 
+/// Whether `a` and `b` are one directory entry spelled two ways, as names
+/// that differ only in case are on a case-insensitive filesystem. Unlike
+/// [`same_file`], a symlink and the file it points to are different entries,
+/// and so are two hard links of one file.
+pub fn same_entry(a: &Path, b: &Path) -> bool {
+    if a.to_string_lossy().to_lowercase() != b.to_string_lossy().to_lowercase() {
+        return false;
+    }
+    #[cfg(unix)]
+    if !is_remote(a) && !is_remote(b) {
+        use std::os::unix::fs::MetadataExt;
+        return match (fs::symlink_metadata(a), fs::symlink_metadata(b)) {
+            (Ok(ma), Ok(mb)) => (ma.dev(), ma.ino()) == (mb.dev(), mb.ino()),
+            _ => false,
+        };
+    }
+    // Without inode numbers: two links are interchangeable if they point to
+    // the same place, and anything else is compared by what it resolves to.
+    match (symlink_meta(a), symlink_meta(b)) {
+        (Ok(ma), Ok(mb)) if ma.kind == Kind::Symlink && mb.kind == Kind::Symlink => {
+            matches!((read_link(a), read_link(b)), (Ok(ta), Ok(tb)) if ta == tb)
+        }
+        (Ok(ma), Ok(mb)) if ma.kind != Kind::Symlink && mb.kind != Kind::Symlink => same_file(a, b),
+        _ => false,
+    }
+}
+
 /// Whether the two paths refer to the same file.
 pub fn same_file(a: &Path, b: &Path) -> bool {
     match (parse_remote(a), parse_remote(b)) {
+        // Same inode catches hard links, and case variants of a name on a
+        // case-insensitive filesystem, which canonicalize() may not unify.
+        #[cfg(unix)]
+        (None, None) => {
+            use std::os::unix::fs::MetadataExt;
+            match (fs::metadata(a), fs::metadata(b)) {
+                (Ok(ma), Ok(mb)) => (ma.dev(), ma.ino()) == (mb.dev(), mb.ino()),
+                _ => false,
+            }
+        }
+        #[cfg(not(unix))]
         (None, None) => match (fs::canonicalize(a), fs::canonicalize(b)) {
             (Ok(ca), Ok(cb)) => ca == cb,
             _ => false,
         },
-        (Some(x), Some(y)) => {
-            x.host == y.host && normalize_posix(&x.path) == normalize_posix(&y.path)
+        (Some(x), Some(y)) if same_host(&x.host, &y.host) => {
+            let (px, py) = (normalize_posix(&x.path), normalize_posix(&y.path));
+            // Symlinked directories (`/tmp` and `/private/tmp` on macOS) only
+            // tell themselves apart on the server.
+            px == py
+                || with_open_conn(&x.host, |c| {
+                    Ok(resolve_existing(c, &px) == resolve_existing(c, &py))
+                })
+                .unwrap_or(false)
         }
         _ => false,
     }
@@ -671,7 +826,7 @@ pub fn same_file(a: &Path, b: &Path) -> bool {
 pub fn same_domain(a: &Path, b: &Path) -> bool {
     match (parse_remote(a), parse_remote(b)) {
         (None, None) => true,
-        (Some(x), Some(y)) => x.host == y.host,
+        (Some(x), Some(y)) => same_host(&x.host, &y.host),
         _ => false,
     }
 }
@@ -687,12 +842,132 @@ pub fn dir_contains(outer: &Path, inner: &Path) -> bool {
             (Ok(co), Ok(ci)) => ci.starts_with(&co),
             _ => false,
         },
-        (Some(a), Some(b)) if a.host == b.host => {
-            let outer = normalize_posix(&a.path);
-            let inner = normalize_posix(&b.path);
-            inner == outer || outer == "/" || inner.starts_with(&format!("{outer}/"))
+        (Some(a), Some(b)) if same_host(&a.host, &b.host) => {
+            let contains = |outer: &str, inner: &str| {
+                inner == outer || outer == "/" || inner.starts_with(&format!("{outer}/"))
+            };
+            let (outer, inner) = (normalize_posix(&a.path), normalize_posix(&b.path));
+            contains(&outer, &inner)
+                || with_open_conn(&a.host, |c| {
+                    Ok(contains(
+                        &resolve_existing(c, &outer),
+                        &resolve_existing(c, &inner),
+                    ))
+                })
+                .unwrap_or(false)
         }
         _ => false,
+    }
+}
+
+// ── Host identity ───────────────────────────────────────────────────────────
+
+/// Where ssh actually connects for a destination, after `~/.ssh/config`
+/// (aliases, `HostName`, `Port`, proxies). Different spellings of a machine,
+/// like `ssh://box` and `ssh://deploy@box.example.com:22`, share it. The user
+/// isn't part of it: the files are the same whoever logs in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Endpoint {
+    pub hostname: String,
+    pub port: String,
+    /// `ProxyJump` and `ProxyCommand`: one name behind different proxies may
+    /// be different machines.
+    pub proxy: String,
+}
+
+/// Parse the output of `ssh -G` (one `key value` per line).
+pub fn endpoint_from_ssh_g(text: &str) -> Option<Endpoint> {
+    let mut endpoint = Endpoint {
+        hostname: String::new(),
+        port: "22".to_string(),
+        proxy: String::new(),
+    };
+    for line in text.lines() {
+        let Some((key, value)) = line.trim().split_once(' ') else {
+            continue;
+        };
+        let value = value.trim();
+        match key {
+            "hostname" => endpoint.hostname = value.to_ascii_lowercase(),
+            "port" => endpoint.port = value.to_string(),
+            "proxyjump" | "proxycommand" if value != "none" => {
+                endpoint.proxy.push_str(key);
+                endpoint.proxy.push('=');
+                endpoint.proxy.push_str(value);
+                endpoint.proxy.push('\n');
+            }
+            _ => {}
+        }
+    }
+    (!endpoint.hostname.is_empty()).then_some(endpoint)
+}
+
+/// The endpoint of `host`, as `ssh -G` resolves it (which doesn't connect).
+/// Falls back to the spelling itself if ssh can't tell.
+fn endpoint(host: &HostSpec) -> Endpoint {
+    static CACHE: LazyLock<Mutex<HashMap<HostSpec, Endpoint>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+    if let Some(endpoint) = CACHE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(host)
+    {
+        return endpoint.clone();
+    }
+    let resolved = Command::new("ssh")
+        .args(host.common_args())
+        .arg("-G")
+        .arg(host.ssh_dest())
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .and_then(|out| endpoint_from_ssh_g(&String::from_utf8_lossy(&out.stdout)))
+        .unwrap_or_else(|| Endpoint {
+            hostname: host.host.to_ascii_lowercase(),
+            port: host.port.unwrap_or(22).to_string(),
+            proxy: String::new(),
+        });
+    CACHE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(host.clone(), resolved.clone());
+    resolved
+}
+
+/// Whether two destinations reach the same machine.
+pub fn same_host(a: &HostSpec, b: &HostSpec) -> bool {
+    a == b || endpoint(a) == endpoint(b)
+}
+
+/// Run `f` on the cached connection to `host`, if there is one. Comparisons
+/// use this so they never connect to a host just to ask.
+fn with_open_conn<R>(host: &HostSpec, f: impl FnOnce(&mut Conn) -> io::Result<R>) -> Option<R> {
+    connections().get_mut(host).and_then(|c| f(c).ok())
+}
+
+/// `realpath` of the longest existing prefix of `path`, with the rest of
+/// `path` appended: what `path` names on the server, even before it exists.
+fn resolve_existing(c: &mut Conn, path: &str) -> String {
+    let path = normalize_posix(path);
+    let mut head = path.as_str();
+    let mut tail: Vec<&str> = Vec::new();
+    loop {
+        if let Ok(real) = c.realpath(head) {
+            let joined = tail
+                .iter()
+                .rev()
+                .fold(real, |dir, name| posix_join(&dir, name));
+            return normalize_posix(&joined);
+        }
+        match head.rsplit_once('/') {
+            Some((parent, name)) if !name.is_empty() => {
+                tail.push(name);
+                head = if parent.is_empty() { "/" } else { parent };
+            }
+            _ => return path,
+        }
     }
 }
 
@@ -786,22 +1061,16 @@ pub fn read_dir_meta(path: &Path) -> io::Result<Vec<(String, Meta)>> {
             let mut out = Vec::new();
             for entry in fs::read_dir(path)? {
                 let entry = entry?;
-                let ft = entry.file_type()?;
-                let kind = if ft.is_symlink() {
-                    Kind::Symlink
-                } else if ft.is_dir() {
-                    Kind::Dir
-                } else {
-                    Kind::File
+                let kind = local_kind(entry.file_type()?);
+                let meta = entry.metadata().ok();
+                let size = match &meta {
+                    Some(m) if kind == Kind::File => m.len(),
+                    _ => 0,
                 };
-                let size = if kind == Kind::File {
-                    entry.metadata().map(|m| m.len()).unwrap_or(0)
-                } else {
-                    0
-                };
+                let mode = meta.as_ref().and_then(local_mode);
                 out.push((
                     entry.file_name().to_string_lossy().into_owned(),
-                    Meta { kind, size },
+                    Meta { kind, size, mode },
                 ));
             }
             Ok(out)
@@ -812,7 +1081,9 @@ pub fn read_dir_meta(path: &Path) -> io::Result<Vec<(String, Meta)>> {
 // ── Mutations ───────────────────────────────────────────────────────────────
 
 /// Create a directory and any missing ancestors.
-pub fn create_dir_all(path: &Path) -> io::Result<()> {
+/// Create `path` and any missing parents. `mode` sets the permissions of
+/// `path` itself if it gets created; the system default applies otherwise.
+pub fn create_dir_all(path: &Path, mode: Option<u32>) -> io::Result<()> {
     match parse_remote(path) {
         Some(r) => with_conn(&r.host, |c| {
             let normalized = normalize_posix(&r.path);
@@ -828,12 +1099,26 @@ pub fn create_dir_all(path: &Path) -> io::Result<()> {
                             format!("{cur}: exists and is not a directory"),
                         ));
                     }
-                    Err(e) if e.kind() == io::ErrorKind::NotFound => c.mkdir(&cur)?,
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                        let mode = if cur == normalized { mode } else { None };
+                        c.mkdir_with_mode(&cur, mode)?
+                    }
                     Err(e) => return Err(e),
                 }
             }
             Ok(())
         }),
+        #[cfg(unix)]
+        None if let Some(mode) = mode => {
+            use std::os::unix::fs::DirBuilderExt;
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            match fs::DirBuilder::new().mode(mode).create(path) {
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists && path.is_dir() => Ok(()),
+                result => result,
+            }
+        }
         None => fs::create_dir_all(path),
     }
 }
@@ -842,13 +1127,39 @@ pub fn create_dir_all(path: &Path) -> io::Result<()> {
 pub fn rename(src: &Path, dst: &Path) -> io::Result<()> {
     match (parse_remote(src), parse_remote(dst)) {
         (None, None) => fs::rename(src, dst),
-        (Some(a), Some(b)) if a.host == b.host => {
+        (Some(a), Some(b)) if same_host(&a.host, &b.host) => {
             with_conn(&a.host, |c| c.rename(&a.path, &b.path))
         }
         _ => Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "rename across filesystem domains",
         )),
+    }
+}
+
+/// Clear the permission `bits` of `path`, keeping the rest of its mode. Does
+/// nothing where the filesystem has no permission bits.
+pub fn remove_mode_bits(path: &Path, bits: u32) -> io::Result<()> {
+    let Some(mode) = symlink_meta(path)?.mode else {
+        return Ok(());
+    };
+    match parse_remote(path) {
+        Some(r) => with_conn(&r.host, |c| c.set_permissions(&r.path, mode & !bits)),
+        #[cfg(unix)]
+        None => {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(mode & !bits))
+        }
+        #[cfg(not(unix))]
+        None => Ok(()),
+    }
+}
+
+/// Remove an empty directory.
+pub fn remove_dir(path: &Path) -> io::Result<()> {
+    match parse_remote(path) {
+        Some(r) => with_conn(&r.host, |c| c.rmdir(&r.path)),
+        None => fs::remove_dir(path),
     }
 }
 
@@ -979,10 +1290,14 @@ struct RemoteWriter {
     host: HostSpec,
     handle: Vec<u8>,
     offset: u64,
+    closed: bool,
 }
 
 impl Write for RemoteWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if self.closed {
+            return Err(io::Error::other("write after flush"));
+        }
         if buf.is_empty() {
             return Ok(0);
         }
@@ -994,14 +1309,23 @@ impl Write for RemoteWriter {
         Ok(n)
     }
 
+    /// Closes the file, which ends writing. A server may report a failed
+    /// write (e.g. quota exceeded) only in its reply to the close, and that's
+    /// the last chance to notice before a move deletes the source.
     fn flush(&mut self) -> io::Result<()> {
-        Ok(())
+        if self.closed {
+            return Ok(());
+        }
+        self.closed = true;
+        with_conn(&self.host, |c| c.close(&self.handle))
     }
 }
 
 impl Drop for RemoteWriter {
     fn drop(&mut self) {
-        close_handle(&self.host, &self.handle);
+        if !self.closed {
+            close_handle(&self.host, &self.handle);
+        }
     }
 }
 
@@ -1021,17 +1345,31 @@ pub fn open_read(path: &Path) -> io::Result<Box<dyn Read>> {
     }
 }
 
-/// Create or truncate `path` for sequential writing.
-pub fn open_write(path: &Path) -> io::Result<Box<dyn Write>> {
+/// Create or truncate `path` for sequential writing. `mode` sets the
+/// permissions of a file this creates, so that a copy is never readable by
+/// more users than its source was, not even while it's being written.
+pub fn open_write(path: &Path, mode: Option<u32>) -> io::Result<Box<dyn Write>> {
     match parse_remote(path) {
         Some(r) => {
             let flags = sftp::OPEN_WRITE | sftp::OPEN_CREAT | sftp::OPEN_TRUNC;
-            let handle = with_conn(&r.host, |c| c.open(&r.path, flags))?;
+            let handle = with_conn(&r.host, |c| c.open_with_mode(&r.path, flags, mode))?;
             Ok(Box::new(RemoteWriter {
                 host: r.host,
                 handle,
                 offset: 0,
+                closed: false,
             }))
+        }
+        #[cfg(unix)]
+        None if let Some(mode) = mode => {
+            use std::os::unix::fs::OpenOptionsExt;
+            let file = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(mode)
+                .open(path)?;
+            Ok(Box::new(file))
         }
         None => Ok(Box::new(fs::File::create(path)?)),
     }

@@ -4,6 +4,7 @@
 //! File panel - shows a directory listing with file details.
 
 use std::cmp::Ordering;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -161,6 +162,9 @@ pub struct Panel {
     pub last_refresh: String,
     /// Available bytes on the panel's filesystem, sampled at refresh time.
     pub free_space: Option<u64>,
+    /// The directory `entries` were read from, which `path` moves away from
+    /// on navigation until the next refresh.
+    listed: PathBuf,
 }
 
 impl Panel {
@@ -175,6 +179,7 @@ impl Panel {
             show_hidden: false,
             last_refresh: String::new(),
             free_space: None,
+            listed: PathBuf::new(),
         };
         panel.refresh();
         panel
@@ -182,6 +187,7 @@ impl Panel {
 
     pub fn with_entries(path: PathBuf, entries: Vec<FileEntry>) -> Self {
         Self {
+            listed: path.clone(),
             path,
             entries,
             cursor: 0,
@@ -194,12 +200,43 @@ impl Panel {
         }
     }
 
+    /// Reload the entries. Rereading the same directory keeps the selection
+    /// and the cursor on the same file, wherever it moved; if that file is
+    /// gone, the cursor stays on its row.
     pub fn refresh(&mut self) {
+        let same_dir = self.listed == self.path;
+        let current = self
+            .entries
+            .get(self.cursor)
+            .filter(|_| same_dir)
+            .map(|e| e.name.clone());
+        let selected: HashSet<String> = self
+            .entries
+            .iter()
+            .filter(|e| same_dir && e.selected)
+            .map(|e| e.name.clone())
+            .collect();
+
         self.last_refresh = platform::format_current_time();
         self.entries = vfs::scan_dir(&self.path, self.show_hidden);
+        self.listed = self.path.clone();
         self.free_space = vfs::free_space(&self.path);
         self.sort();
+        for entry in &mut self.entries {
+            entry.selected = selected.contains(&entry.name);
+        }
+        if let Some(name) = current {
+            self.move_cursor_to(&name);
+        }
         self.cursor = self.cursor.min(self.entries.len().saturating_sub(1));
+        self.scroll_offset = self.scroll_offset.min(self.cursor);
+    }
+
+    /// Put the cursor on the entry called `name`, if there is one.
+    fn move_cursor_to(&mut self, name: &str) {
+        if let Some(pos) = self.entries.iter().position(|e| e.name == name) {
+            self.cursor = pos;
+        }
     }
 
     /// Move this panel to `path`, resetting cursor and scroll, and reload entries.
@@ -296,10 +333,8 @@ impl Panel {
                 self.scroll_offset = 0;
                 self.refresh();
 
-                if let Some(old) = old_name
-                    && let Some(pos) = self.entries.iter().position(|e| e.name == old)
-                {
-                    self.cursor = pos;
+                if let Some(old) = old_name {
+                    self.move_cursor_to(&old);
                 }
             }
         }
@@ -315,6 +350,11 @@ impl Panel {
         if self.cursor >= self.scroll_offset + visible_height {
             self.scroll_offset = self.cursor - visible_height + 1;
         }
+        // Don't leave rows empty while entries above are scrolled out of view,
+        // e.g. after the list shrinks or the terminal grows.
+        self.scroll_offset = self
+            .scroll_offset
+            .min(self.entries.len().saturating_sub(visible_height));
     }
 
     pub fn selection_info(&self) -> (usize, u64) {
@@ -428,7 +468,12 @@ impl Panel {
             self.sort_by = sort_by;
             self.sort_dir = SortDir::Ascending;
         }
+        // The cursor stays on its file, not its row.
+        let current = self.entries.get(self.cursor).map(|e| e.name.clone());
         self.sort();
+        if let Some(name) = current {
+            self.move_cursor_to(&name);
+        }
     }
 }
 

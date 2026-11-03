@@ -1,9 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use std::borrow::Borrow;
 use std::fmt::{self};
 use std::ops::{Bound, Deref, DerefMut, RangeBounds};
-use std::slice;
 use std::str::Utf8Error;
 
 use crate::alloc::Allocator;
@@ -38,6 +38,12 @@ impl<'a> BString<'a> {
     pub fn from_utf8(vec: BVec<'a, u8>) -> Result<Self, Utf8Error> {
         str::from_utf8(&vec)?;
         Ok(Self { vec })
+    }
+
+    /// Converts this string into a byte vector.
+    #[inline]
+    pub fn into_bytes(self) -> BVec<'a, u8> {
+        self.vec
     }
 
     /// Validates UTF-8, replacing invalid sequences with U+FFFD.
@@ -94,6 +100,25 @@ impl<'a> BString<'a> {
         let mut res = Self::empty();
         res.push_utf16_lossy(alloc, string);
         res
+    }
+
+    /// Constructs a [`BString`] from ptr, length, and capacity.
+    ///
+    /// # Safety
+    ///
+    /// If you pass invalid arguments, this code will `rm -rf` your disk.
+    #[inline]
+    pub unsafe fn from_raw_parts(buf: *mut u8, length: usize, capacity: usize) -> Self {
+        unsafe {
+            Self {
+                vec: BVec::from_raw_parts(buf, length, capacity),
+            }
+        }
+    }
+
+    #[inline]
+    pub fn into_raw_parts(self) -> (*mut u8, usize, usize) {
+        self.vec.into_raw_parts()
     }
 
     /// Length in bytes, not characters.
@@ -160,13 +185,7 @@ impl<'a> BString<'a> {
 
     /// Appends a single `char`, encoding it as UTF-8.
     pub fn push(&mut self, alloc: &'a dyn Allocator, ch: char) {
-        self.reserve(alloc, 4);
-        unsafe {
-            let len = self.vec.len();
-            let dst = self.vec.as_mut_ptr().add(len);
-            let add = ch.encode_utf8(slice::from_raw_parts_mut(dst, 4)).len();
-            self.vec.set_len(len + add);
-        }
+        self.vec.push_char(alloc, ch);
     }
 
     /// Empties the string. The allocation is kept.
@@ -174,8 +193,8 @@ impl<'a> BString<'a> {
         self.vec.clear();
     }
 
-    /// Returns a [`BorrowedStringFormatter`] pairing this string with an allocator,
-    /// enabling use with `write!` and `fmt::Write`.
+    /// Pairs this instance with an allocator, making it possible to
+    /// use `write!` and `fmt::Write`, which are allocator-unaware.
     pub fn formatter<A>(&mut self, alloc: &'a A) -> BStringFormatter<'_, 'a, A>
     where
         A: Allocator,
@@ -195,7 +214,7 @@ impl<'a> BString<'a> {
     pub fn push_utf16_lossy(&mut self, alloc: &'a dyn Allocator, string: &[u16]) {
         self.extend(
             alloc,
-            char::decode_utf16(string.iter().cloned())
+            char::decode_utf16(string.iter().copied())
                 .map(|r| r.unwrap_or(char::REPLACEMENT_CHARACTER)),
         );
     }
@@ -292,6 +311,27 @@ impl DerefMut for BString<'_> {
     #[inline]
     fn deref_mut(&mut self) -> &mut str {
         self.as_mut_str()
+    }
+}
+
+impl AsRef<str> for BString<'_> {
+    #[inline]
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl AsRef<[u8]> for BString<'_> {
+    #[inline]
+    fn as_ref(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
+impl Borrow<str> for BString<'_> {
+    #[inline]
+    fn borrow(&self) -> &str {
+        self.as_str()
     }
 }
 

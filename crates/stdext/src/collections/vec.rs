@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use std::borrow::Borrow;
 use std::hint::assert_unchecked;
 use std::iter::FusedIterator;
 use std::marker::PhantomData;
@@ -90,6 +91,28 @@ impl<'a, T> BVec<'a, T> {
         );
 
         unsafe { Vec::from_raw_parts(self.ptr.as_ptr(), self.len, self.cap) }
+    }
+
+    /// Constructs a [`BVec`] from ptr, length, and capacity.
+    ///
+    /// # Safety
+    ///
+    /// If you pass invalid arguments, this code will `rm -rf` your disk.
+    #[inline]
+    pub unsafe fn from_raw_parts(buf: *mut T, length: usize, capacity: usize) -> Self {
+        Self {
+            ptr: unsafe { NonNull::new_unchecked(buf) },
+            len: length,
+            cap: capacity,
+            _marker: PhantomData,
+            #[cfg(debug_assertions)]
+            alloc: None,
+        }
+    }
+
+    #[inline]
+    pub fn into_raw_parts(mut self) -> (*mut T, usize, usize) {
+        (self.as_mut_ptr(), self.len(), self.capacity())
     }
 
     /// Number of initialized elements.
@@ -184,7 +207,7 @@ impl<'a, T> BVec<'a, T> {
         let len = self.len;
         let cap = self.cap;
         if additional > cap - len {
-            self.grow(alloc, self.cap, additional);
+            self.grow(alloc, self.cap, additional, 8);
         }
         unsafe {
             // Right now the following asserts are somewhat useless, because they only work
@@ -205,7 +228,7 @@ impl<'a, T> BVec<'a, T> {
         let len = self.len;
         let cap = self.cap;
         if additional > cap - len {
-            self.grow(alloc, 0, additional);
+            self.grow(alloc, 0, additional, 0);
         }
         unsafe {
             // See reserve().
@@ -219,7 +242,7 @@ impl<'a, T> BVec<'a, T> {
         let len = self.len;
         let cap = self.cap;
         if len >= cap {
-            self.grow(alloc, cap, 1);
+            self.grow(alloc, cap, 1, 8);
         }
         unsafe {
             // See reserve().
@@ -229,7 +252,7 @@ impl<'a, T> BVec<'a, T> {
     }
 
     #[cold]
-    fn grow(&mut self, alloc: &'a dyn Allocator, cap: usize, add: usize) {
+    fn grow(&mut self, alloc: &'a dyn Allocator, cap: usize, add: usize, min: usize) {
         debug_assert!(add > 0, "growing by zero makes no sense");
 
         #[cfg(debug_assertions)]
@@ -238,7 +261,7 @@ impl<'a, T> BVec<'a, T> {
             "switching between allocators on a single BVec heavily suggests you're about to leak memory"
         );
 
-        let new_cap = (cap * 2).max(self.len + add).max(8);
+        let new_cap = (cap * 2).max(self.len + add).max(min);
         let new_ptr = unsafe {
             alloc.realloc(
                 self.ptr.cast(),
@@ -436,6 +459,31 @@ impl<'a, T: Copy> BVec<'a, T> {
     }
 }
 
+impl<'a> BVec<'a, u8> {
+    /// Appends a single `char`, encoding it as UTF-8.
+    pub fn push_char(&mut self, alloc: &'a dyn Allocator, ch: char) {
+        self.reserve(alloc, 4);
+        unsafe {
+            let len = self.len();
+            let dst = self.as_mut_ptr().add(len);
+            let add = ch.encode_utf8(slice::from_raw_parts_mut(dst, 4)).len();
+            self.set_len(len + add);
+        }
+    }
+
+    /// Pairs this instance with an allocator, making it possible to
+    /// use `write!` and `fmt::Write`, which are allocator-unaware.
+    pub fn formatter<A>(&mut self, alloc: &'a A) -> BVecFormatter<'_, 'a, A>
+    where
+        A: Allocator,
+    {
+        BVecFormatter {
+            string: self,
+            alloc,
+        }
+    }
+}
+
 #[cfg(windows)]
 unsafe extern "system" {
     fn MultiByteToWideChar(
@@ -508,6 +556,18 @@ impl<T> DerefMut for BVec<'_, T> {
     #[inline]
     fn deref_mut(&mut self) -> &mut [T] {
         self.as_mut_slice()
+    }
+}
+
+impl<T> AsRef<[T]> for BVec<'_, T> {
+    fn as_ref(&self) -> &[T] {
+        self.as_slice()
+    }
+}
+
+impl<T> Borrow<[T]> for BVec<'_, T> {
+    fn borrow(&self) -> &[T] {
+        self.as_slice()
     }
 }
 
@@ -638,13 +698,14 @@ impl<'a, T> Iterator for IntoIter<'a, T> {
 
     #[inline]
     fn nth(&mut self, n: usize) -> Option<Self::Item> {
-        if n >= self.len() {
-            self.ptr = self.end;
-            return None;
+        // Like `next()` called `n` times, the skipped elements are dropped.
+        let skip = n.min(self.len());
+        unsafe {
+            let skipped = ptr::slice_from_raw_parts_mut(self.ptr.as_ptr(), skip);
+            self.ptr = self.ptr.add(skip);
+            ptr::drop_in_place(skipped);
         }
-        let ptr = self.ptr;
-        self.ptr = unsafe { ptr.add(n + 1) };
-        Some(unsafe { ptr.read() })
+        self.next()
     }
 
     fn fold<B, F>(mut self, mut accum: B, mut f: F) -> B
@@ -654,7 +715,7 @@ impl<'a, T> Iterator for IntoIter<'a, T> {
         while self.ptr != self.end {
             let ptr = self.ptr;
             self.ptr = unsafe { ptr.add(1) };
-            accum = f(accum, unsafe { self.ptr.read() });
+            accum = f(accum, unsafe { ptr.read() });
         }
         accum
     }
@@ -681,3 +742,92 @@ impl<'a, T> ExactSizeIterator for IntoIter<'a, T> {
 }
 
 impl<'a, T> FusedIterator for IntoIter<'a, T> {}
+
+/// Pairs a [`BVec`] with an allocator so you can use `write!` on it.
+// (See `BStringFormatter` for more information, which is the original.)
+pub struct BVecFormatter<'s, 'a, A> {
+    string: &'s mut BVec<'a, u8>,
+    alloc: &'a A,
+}
+
+impl<A> fmt::Write for BVecFormatter<'_, '_, A>
+where
+    A: Allocator,
+{
+    #[inline]
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        self.string.extend_from_slice(self.alloc, s.as_bytes());
+        Ok(())
+    }
+
+    #[inline]
+    fn write_char(&mut self, c: char) -> fmt::Result {
+        self.string.push_char(self.alloc, c);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::rc::Rc;
+
+    use super::*;
+
+    #[test]
+    fn test_into_iter_matches_vec() {
+        fn iter(buf: &mut [i32]) -> IntoIter<'_, i32> {
+            BVec::from_slice(buf).into_iter()
+        }
+
+        let expected: Vec<i32> = (0..10).collect();
+        let vec = || expected.clone().into_iter();
+        let mut buf = expected.clone();
+        let push = |mut acc: Vec<i32>, x| {
+            acc.push(x);
+            acc
+        };
+
+        assert_eq!(iter(&mut buf).fold(Vec::new(), push), expected);
+        assert_eq!(iter(&mut buf).sum::<i32>(), vec().sum::<i32>());
+
+        for n in 0..12 {
+            assert_eq!(iter(&mut buf).nth(n), vec().nth(n), "nth({n})");
+            assert_eq!(
+                iter(&mut buf).skip(n).fold(Vec::new(), push),
+                vec().skip(n).fold(Vec::new(), push),
+                "skip({n})"
+            );
+            assert_eq!(
+                iter(&mut buf).skip(n).sum::<i32>(),
+                vec().skip(n).sum::<i32>()
+            );
+        }
+
+        let mut it = iter(&mut buf);
+        assert_eq!(it.nth(2), Some(2));
+        assert_eq!(it.nth(3), Some(6));
+        assert_eq!(it.next(), Some(7));
+        assert_eq!(it.len(), 2);
+        assert_eq!(it.nth(5), None);
+        assert_eq!(it.len(), 0);
+        assert_eq!(it.next(), None);
+    }
+
+    #[test]
+    fn test_into_iter_nth_drops_skipped() {
+        let rc = Rc::new(());
+        let bvec = BVec::from_std_vec(vec![rc.clone(); 10]);
+        assert_eq!(Rc::strong_count(&rc), 11);
+
+        let mut it = bvec.into_iter();
+        let item = it.nth(3);
+        assert!(item.is_some());
+        // 3 skipped elements were dropped, 1 was returned and 6 remain.
+        assert_eq!(Rc::strong_count(&rc), 8);
+        drop(item);
+        assert_eq!(Rc::strong_count(&rc), 7);
+
+        assert!(it.nth(100).is_none());
+        assert_eq!(Rc::strong_count(&rc), 1);
+    }
+}

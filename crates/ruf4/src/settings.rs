@@ -146,12 +146,13 @@ impl Settings {
             };
 
             if value.contains(',') {
-                // New format: full replacement.
+                // New format: full replacement. A lone `,` unbinds the action.
                 let parsed_keys: Vec<_> = value
                     .split(',')
                     .filter_map(|s| action::parse_key_name(s.trim()))
                     .collect();
-                if !parsed_keys.is_empty() {
+                let unbind = value.split(',').all(|s| s.trim().is_empty());
+                if !parsed_keys.is_empty() || unbind {
                     bindings.retain(|b| b.action != action);
                     for input_key in parsed_keys {
                         bindings.push(Binding {
@@ -159,17 +160,6 @@ impl Settings {
                             action,
                         });
                     }
-                }
-            } else if let Some(input_key) = action::parse_key_name(value) {
-                // Legacy format: add if not already present.
-                if !bindings
-                    .iter()
-                    .any(|b| b.action == action && b.key == input_key)
-                {
-                    bindings.push(Binding {
-                        key: input_key,
-                        action,
-                    });
                 }
             } else if let Some(input_key) = action::parse_key_name(value) {
                 // Legacy format: add if not already present.
@@ -248,10 +238,11 @@ quick_view={}\n",
         }
 
         // Keybindings: for each action whose key set differs from defaults,
-        // save all keys (comma-separated).
+        // save all keys (comma-separated). Defaults are visited too, since an
+        // action whose keys were all removed has no bindings left.
         let defaults = action::default_bindings();
         let mut saved_actions = Vec::new();
-        for binding in &self.bindings {
+        for binding in defaults.iter().chain(&self.bindings) {
             if saved_actions.contains(&action::action_str(binding.action)) {
                 continue;
             }
@@ -272,7 +263,13 @@ quick_view={}\n",
                     .iter()
                     .map(|k| action::key_display_name(*k))
                     .collect();
-                content.push_str(&format!("bind.{}={}\n", action_name, key_strs.join(",")));
+                let mut keys = key_strs.join(",");
+                // The comma marks a replacement list: without one, a single
+                // key would load as an addition to the defaults.
+                if key_strs.len() < 2 {
+                    keys.push(',');
+                }
+                content.push_str(&format!("bind.{action_name}={keys}\n"));
                 saved_actions.push(action_name);
             }
         }
@@ -283,13 +280,20 @@ quick_view={}\n",
             if let (Some(current), Some(default)) =
                 (self.theme.get_field(field), default_theme.get_field(field))
                 && theme::color_str(current) != theme::color_str(default)
-                && theme::color_str(current) != theme::color_str(default)
             {
                 content.push_str(&format!("theme.{field}={}\n", theme::color_str(current),));
             }
         }
 
-        fs::write(&path, content).map_err(|e| format!("cannot write settings: {e}"))
+        // Replace the file in one step, so that a crash or a full disk can't
+        // leave a truncated one behind.
+        let tmp = path.with_extension(format!("ini.{}.tmp", std::process::id()));
+        fs::write(&tmp, content)
+            .and_then(|()| fs::rename(&tmp, &path))
+            .map_err(|e| {
+                let _ = fs::remove_file(&tmp);
+                format!("cannot write settings: {e}")
+            })
     }
 }
 

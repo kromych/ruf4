@@ -29,7 +29,8 @@ pub fn same_file_error(name: &str, is_copy: bool) -> String {
 }
 
 pub fn ops_mkdir(path: &Path) -> Result<(), String> {
-    vfs::create_dir_all(path).map_err(|e| format!("Cannot create \"{}\": {e}", path.display()))
+    vfs::create_dir_all(path, None)
+        .map_err(|e| format!("Cannot create \"{}\": {e}", path.display()))
 }
 
 pub fn ops_delete(paths: &[PathBuf]) -> Vec<String> {
@@ -45,8 +46,8 @@ pub fn ops_delete(paths: &[PathBuf]) -> Vec<String> {
     errors
 }
 
-pub fn ops_build_pairs(sources: &[PathBuf], dest: &str) -> Vec<(PathBuf, PathBuf)> {
-    let dest_path = PathBuf::from(dest);
+pub fn ops_build_pairs(sources: &[PathBuf], dest: &Path) -> Vec<(PathBuf, PathBuf)> {
+    let dest_path = dest.to_path_buf();
     let dest_is_dir = vfs::is_dir(&dest_path);
     let mut pairs = Vec::new();
 
@@ -235,14 +236,25 @@ pub fn do_move(state: &mut State, dest: &str) {
 }
 
 fn do_copy_move(state: &mut State, dest: &str, is_copy: bool) {
-    // Connect a remote destination now: the worker cannot prompt for
-    // authentication.
-    if let Err(message) = vfs::ensure_host(Path::new(dest)) {
-        state.dialog = Dialog::Error { message };
+    if dest.trim().is_empty() {
+        state.dialog = Dialog::None;
         return;
     }
+    // Relative to the panel, like `cd`, not to wherever ruf4 was started.
+    let dest = resolve_cd_target(&state.active_panel().path, dest);
+    // Connect a remote destination now: the worker cannot prompt for
+    // authentication.
+    let dest = match vfs::ensure_host(&dest)
+        .and_then(|()| vfs::with_remote_home(&dest).map_err(|e| format!("{}: {e}", dest.display())))
+    {
+        Ok(dest) => dest,
+        Err(message) => {
+            state.dialog = Dialog::Error { message };
+            return;
+        }
+    };
     let sources = state.active_panel().selected_or_current();
-    let pairs = ops_build_pairs(&sources, dest);
+    let pairs = ops_build_pairs(&sources, &dest);
     if pairs.is_empty() {
         state.dialog = Dialog::None;
         return;
@@ -258,6 +270,16 @@ pub fn do_rename(state: &mut State, new_name: &str) {
     let panel = state.active_panel();
     let old_path = vfs::join(&panel.path, &panel.entries[panel.cursor].name);
     let new_path = vfs::join(&panel.path, new_name);
+    // Renaming onto an existing entry would silently replace it. Changing
+    // just the case of a name on a case-insensitive filesystem is fine. That
+    // has to compare the entries themselves: a symlink resolves to the same
+    // file as its target, yet renaming it onto the target destroys the target.
+    if vfs::symlink_meta(&new_path).is_ok() && !vfs::same_entry(&old_path, &new_path) {
+        state.dialog = Dialog::Error {
+            message: format!("Rename failed: \"{new_name}\" already exists"),
+        };
+        return;
+    }
     match vfs::rename(&old_path, &new_path) {
         Ok(()) => {
             state.dialog = Dialog::None;

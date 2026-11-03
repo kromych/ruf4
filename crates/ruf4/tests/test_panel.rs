@@ -1,3 +1,6 @@
+// Copyright (c) 2026 ruf4 contributors.
+// Licensed under the MIT License.
+
 use std::path::PathBuf;
 
 use ruf4::panel::{Panel, SortBy, SortDir, format_size, glob_match, make_entry};
@@ -209,6 +212,38 @@ fn test_adjust_scroll_follows_cursor() {
     assert_eq!(p.scroll_offset, 3); // scroll so cursor is visible
 }
 
+#[test]
+fn test_adjust_scroll_fills_view_when_list_fits() {
+    let mut p = test_panel(&[("a", false, 0), ("b", false, 0), ("c", false, 0)]);
+    p.cursor = 3;
+    p.scroll_offset = 3; // e.g. scrolled before the terminal grew
+    p.adjust_scroll(10);
+    assert_eq!(p.scroll_offset, 0);
+}
+
+#[test]
+fn test_refresh_after_shrink_keeps_scroll_within_entries() {
+    let dir = std::env::temp_dir().join(format!("ruf4_panel_shrink_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for i in 0..30 {
+        std::fs::write(dir.join(format!("f{i:02}")), "").unwrap();
+    }
+    let mut p = Panel::new(dir.clone());
+    p.cursor = p.entries.len() - 1;
+    p.adjust_scroll(10);
+    assert!(p.scroll_offset > 0);
+
+    // Everything gets deleted, leaving only "..".
+    for i in 0..30 {
+        std::fs::remove_file(dir.join(format!("f{i:02}"))).unwrap();
+    }
+    p.refresh();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(p.entries.len(), 1);
+    assert_eq!((p.cursor, p.scroll_offset), (0, 0));
+}
+
 // --- Glob matching ---
 
 #[test]
@@ -268,4 +303,58 @@ fn test_format_size() {
     assert_eq!(format_size(1_500_000), "1.5M");
     assert_eq!(format_size(2_500_000_000), "2.5G");
     assert_eq!(format_size(1_200_000_000_000), "1.2T");
+}
+
+// --- Cursor and selection across reloads ---
+
+fn name_at_cursor(p: &Panel) -> &str {
+    &p.entries[p.cursor].name
+}
+
+#[test]
+fn test_sort_keeps_cursor_on_its_file() {
+    let mut p = test_panel(&[("big", false, 999), ("small", false, 1), ("mid", false, 50)]);
+    p.cursor = p.entries.iter().position(|e| e.name == "big").unwrap();
+    p.set_sort(SortBy::Size);
+    assert_eq!(name_at_cursor(&p), "big");
+}
+
+#[test]
+fn test_refresh_keeps_cursor_file_and_selection() {
+    let dir = std::env::temp_dir().join(format!("ruf4_panel_keep_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    for name in ["b.txt", "c.txt", "d.txt", "sub/d.txt"] {
+        std::fs::write(dir.join(name), "").unwrap();
+    }
+    let mut p = Panel::new(dir.clone());
+    p.cursor = p.entries.iter().position(|e| e.name == "d.txt").unwrap();
+    p.toggle_select(); // selects d.txt
+    p.cursor = p.entries.iter().position(|e| e.name == "c.txt").unwrap();
+
+    // New files sort in front of the cursor; one selected file goes away.
+    std::fs::write(dir.join("a1.txt"), "").unwrap();
+    std::fs::write(dir.join("a2.txt"), "").unwrap();
+    p.refresh();
+    assert_eq!(name_at_cursor(&p), "c.txt");
+    let selected: Vec<&str> = p
+        .entries
+        .iter()
+        .filter(|e| e.selected)
+        .map(|e| e.name.as_str())
+        .collect();
+    assert_eq!(selected, ["d.txt"]);
+
+    // The cursor's file going away leaves the cursor on its row.
+    let row = p.cursor;
+    std::fs::remove_file(dir.join("c.txt")).unwrap();
+    p.refresh();
+    assert_eq!(p.cursor, row);
+    assert_eq!(name_at_cursor(&p), "d.txt");
+
+    // Another directory starts afresh, even with the same names in it.
+    p.cursor = p.entries.iter().position(|e| e.name == "sub").unwrap();
+    p.enter();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(p.entries.iter().all(|e| !e.selected));
 }

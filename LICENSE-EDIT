@@ -2,9 +2,11 @@ The following components of ruf4 are derived from or include code from
 Microsoft Edit (https://github.com/microsoft/edit), which is licensed
 under the MIT License:
 
-  - crates/stdext/    (arena allocators, collections, SIMD utilities)
-  - crates/tui/src/   (VT parser, framebuffer, input handling, TUI framework,
-                        color system, platform abstraction, unicode handling)
+  - crates/stdext/        (arena allocators, collections, SIMD utilities)
+  - crates/lsh/           (syntax highlighting compiler, runtime, definitions)
+  - crates/tui/src/       (VT parser, framebuffer, input handling, TUI framework,
+                            color system, platform abstraction, unicode handling)
+  - crates/ruf4/src/lsh/  (the adapter between ruf4 and lsh)
 
 The original copyright and license follows:
 
