@@ -4,6 +4,7 @@
 //! Drawing routines for the dual-panel file commander UI.
 //!
 //! Layout:
+//! ```text
 //! ┌─────── Left Panel ────────┬──────── Right Panel ───────┐
 //! │ Name          Size  Date  │ Name          Size  Date   │
 //! │ ..                        │ ..                         │
@@ -14,6 +15,7 @@
 //! ├────────────────────────────────────────────────────────┤
 //! │ 1Help 2Save 3View 4Edit 5Copy 6Move 7Mkdir 8Del 9Menu 10Quit │
 //! └────────────────────────────────────────────────────────┘
+//! ```
 
 use ruf4_tui::framebuffer::IndexedColor;
 use ruf4_tui::helpers::*;

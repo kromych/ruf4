@@ -174,7 +174,7 @@ impl<'a> BString<'a> {
         self.vec.clear();
     }
 
-    /// Returns a [`BorrowedStringFormatter`] pairing this string with an allocator,
+    /// Returns a [`BStringFormatter`] pairing this string with an allocator,
     /// enabling use with `write!` and `fmt::Write`.
     pub fn formatter<A>(&mut self, alloc: &'a A) -> BStringFormatter<'_, 'a, A>
     where
