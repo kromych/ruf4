@@ -427,7 +427,7 @@ fn draw_single_panel(
         ctx.block_end();
     }
 
-    let start = panel.scroll_offset;
+    let start = panel.scroll_offset.min(panel.entries.len());
     let end = (start + visible_height).min(panel.entries.len());
     let thumb = scrollbar_thumb(panel.entries.len(), visible_height, start);
     // Reserve 2 columns for " █" when scrollbar is active.

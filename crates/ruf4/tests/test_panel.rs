@@ -209,6 +209,38 @@ fn test_adjust_scroll_follows_cursor() {
     assert_eq!(p.scroll_offset, 3); // scroll so cursor is visible
 }
 
+#[test]
+fn test_adjust_scroll_fills_view_when_list_fits() {
+    let mut p = test_panel(&[("a", false, 0), ("b", false, 0), ("c", false, 0)]);
+    p.cursor = 3;
+    p.scroll_offset = 3; // e.g. scrolled before the terminal grew
+    p.adjust_scroll(10);
+    assert_eq!(p.scroll_offset, 0);
+}
+
+#[test]
+fn test_refresh_after_shrink_keeps_scroll_within_entries() {
+    let dir = std::env::temp_dir().join(format!("ruf4_panel_shrink_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for i in 0..30 {
+        std::fs::write(dir.join(format!("f{i:02}")), "").unwrap();
+    }
+    let mut p = Panel::new(dir.clone());
+    p.cursor = p.entries.len() - 1;
+    p.adjust_scroll(10);
+    assert!(p.scroll_offset > 0);
+
+    // Everything gets deleted, leaving only "..".
+    for i in 0..30 {
+        std::fs::remove_file(dir.join(format!("f{i:02}"))).unwrap();
+    }
+    p.refresh();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(p.entries.len(), 1);
+    assert_eq!((p.cursor, p.scroll_offset), (0, 0));
+}
+
 // --- Glob matching ---
 
 #[test]

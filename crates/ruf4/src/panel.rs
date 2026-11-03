@@ -200,6 +200,7 @@ impl Panel {
         self.free_space = vfs::free_space(&self.path);
         self.sort();
         self.cursor = self.cursor.min(self.entries.len().saturating_sub(1));
+        self.scroll_offset = self.scroll_offset.min(self.cursor);
     }
 
     /// Move this panel to `path`, resetting cursor and scroll, and reload entries.
@@ -315,6 +316,11 @@ impl Panel {
         if self.cursor >= self.scroll_offset + visible_height {
             self.scroll_offset = self.cursor - visible_height + 1;
         }
+        // Don't leave rows empty while entries above are scrolled out of view,
+        // e.g. after the list shrinks or the terminal grows.
+        self.scroll_offset = self
+            .scroll_offset
+            .min(self.entries.len().saturating_sub(visible_height));
     }
 
     pub fn selection_info(&self) -> (usize, u64) {
