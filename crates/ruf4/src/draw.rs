@@ -1403,8 +1403,10 @@ fn draw_help_dialog(
         ..DIALOG_BLUE_50
     };
     let caption = if total > max_visible {
-        let page = scroll + 1;
-        let pages = (help_text.len() as f32 / max_visible as f32).ceil() as usize;
+        // The page holding the last visible row: 1 at the top, the last page
+        // when scrolled to the end.
+        let page = (scroll + max_visible as usize).div_ceil(max_visible as usize);
+        let pages = help_text.len().div_ceil(max_visible as usize);
         arena_format!(
             ctx.arena(),
             "Help ({page}/{pages}) - Up/Down=Scroll  Click=Run  Esc=Close"
