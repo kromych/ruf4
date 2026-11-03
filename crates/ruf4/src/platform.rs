@@ -467,11 +467,54 @@ pub fn with_tui_suspended<R>(f: impl FnOnce() -> R) -> R {
     use ruf4_tui::sys;
     sys::write_stdout(TUI_LEAVE_SEQ);
     sys::suspend();
+    #[cfg(unix)]
+    let saved = ignore_terminal_interrupts();
     let result = f();
+    #[cfg(unix)]
+    restore_terminal_interrupts(saved);
     sys::resume();
     sys::write_stdout(TUI_ENTER_SEQ);
     sys::inject_window_size_into_stdin();
     result
+}
+
+/// The signals the terminal sends to its whole foreground process group,
+/// ruf4 included, when the user presses Ctrl+C or Ctrl+\ in a child.
+#[cfg(unix)]
+const TERMINAL_INTERRUPTS: [libc::c_int; 2] = [libc::SIGINT, libc::SIGQUIT];
+
+/// Keep the terminal's interrupt keys from killing ruf4 while a child has
+/// the terminal. This catches the signals rather than ignoring them, since
+/// an ignored signal would stay ignored in the children too, while a caught
+/// one reverts to the default when they exec. SA_RESTART keeps the signal
+/// from failing the wait for the child or for Enter.
+#[cfg(unix)]
+fn ignore_terminal_interrupts() -> [libc::sigaction; 2] {
+    extern "C" fn noop(_: libc::c_int) {}
+
+    // SAFETY: plain sigaction calls with valid, initialized structs; the
+    // handler does nothing, so it is trivially async-signal-safe.
+    unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        action.sa_sigaction = noop as extern "C" fn(libc::c_int) as libc::sighandler_t;
+        action.sa_flags = libc::SA_RESTART;
+        libc::sigemptyset(&mut action.sa_mask);
+        let mut saved: [libc::sigaction; 2] = std::mem::zeroed();
+        for (signal, old) in TERMINAL_INTERRUPTS.iter().zip(&mut saved) {
+            libc::sigaction(*signal, &action, old);
+        }
+        saved
+    }
+}
+
+#[cfg(unix)]
+fn restore_terminal_interrupts(saved: [libc::sigaction; 2]) {
+    // SAFETY: restores dispositions previously returned by sigaction.
+    unsafe {
+        for (signal, old) in TERMINAL_INTERRUPTS.iter().zip(&saved) {
+            libc::sigaction(*signal, old, std::ptr::null_mut());
+        }
+    }
 }
 
 /// Show the user screen (the primary buffer with the output of previously run

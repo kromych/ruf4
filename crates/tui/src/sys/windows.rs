@@ -80,6 +80,7 @@ struct State {
     leading_surrogate: u16,
     inject_resize: bool,
     wants_exit: bool,
+    suspended: bool,
 }
 
 static mut STATE: State = State {
@@ -93,10 +94,17 @@ static mut STATE: State = State {
     leading_surrogate: 0,
     inject_resize: false,
     wants_exit: false,
+    suspended: false,
 };
 
-extern "system" fn console_ctrl_handler(_ctrl_type: u32) -> BOOL {
+extern "system" fn console_ctrl_handler(ctrl_type: u32) -> BOOL {
     unsafe {
+        // While suspended, Ctrl+C/Ctrl+Break are meant for the foreground child process.
+        // Swallow them, so that we neither get terminated nor exit once we resume.
+        if STATE.suspended && matches!(ctrl_type, Console::CTRL_C_EVENT | Console::CTRL_BREAK_EVENT)
+        {
+            return 1;
+        }
         STATE.wants_exit = true;
         IO::CancelIoEx(STATE.stdin, null());
     }
@@ -233,6 +241,7 @@ impl Drop for Deinit {
 /// program can run with normal line discipline. Pair with [`resume`].
 pub fn suspend() {
     unsafe {
+        STATE.suspended = true;
         if STATE.stdin_mode_old != INVALID_CONSOLE_MODE {
             Console::SetConsoleMode(STATE.stdin, STATE.stdin_mode_old);
         }
@@ -258,6 +267,7 @@ pub fn resume() {
                 | Console::ENABLE_VIRTUAL_TERMINAL_PROCESSING
                 | Console::DISABLE_NEWLINE_AUTO_RETURN,
         );
+        STATE.suspended = false;
     }
 }
 
