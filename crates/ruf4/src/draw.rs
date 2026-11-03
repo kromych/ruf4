@@ -1527,13 +1527,8 @@ fn draw_list_dialog(
     let w = dialog_begin(ctx, theme, &spec, caption, h, size);
     dialog_prompt(ctx, "prompt", prompt);
 
-    let max_show = (h.min(size.height - 4) - 3).max(0) as usize;
-    // Derive scroll offset from cursor so the cursor is always visible.
-    let scroll = if cursor >= max_show {
-        cursor - max_show + 1
-    } else {
-        0
-    };
+    let max_show = crate::state::list_dialog_rows(entries.len(), size.height);
+    let scroll = crate::state::list_dialog_scroll(cursor, max_show);
     let end = (scroll + max_show).min(entries.len());
     let thumb = scrollbar_thumb(entries.len(), max_show, scroll);
     let line_w = if thumb.is_some() { w } else { w - 4 };

@@ -1,41 +1,104 @@
 // Copyright (c) 2026 ruf4 contributors.
 // Licensed under the MIT License.
 
-//! Rendering tests: draw a frame into memory and inspect the escape sequences
-//! the terminal would receive.
+//! Rendering tests: draw frames into memory, feeding input the way the main
+//! loop does, and inspect what the terminal would receive.
 
 use std::path::PathBuf;
 
+use ruf4::action::Action;
 use ruf4::draw;
 use ruf4::panel::{Panel, make_entry};
-use ruf4::state::State;
-use ruf4_tui::helpers::Size;
-use ruf4_tui::input::Input;
+use ruf4::state::{Dialog, State};
+use ruf4_tui::helpers::{CoordType, Point, Size};
+use ruf4_tui::input::{Input, InputMouse, InputMouseState, kbmod, vk};
 use ruf4_tui::tui::Tui;
 
+/// A terminal of a fixed size, driven like `main.rs` drives the real one.
+struct Screen {
+    tui: Tui,
+    size: Size,
+}
+
+impl Screen {
+    fn new(width: CoordType, height: CoordType) -> Self {
+        let size = Size { width, height };
+        Self {
+            tui: Tui::new().unwrap(),
+            size,
+        }
+    }
+
+    /// Handle `input` (a resize for the first frame), draw until settled, and
+    /// return the raw output of a full redraw.
+    fn frame(&mut self, state: &mut State, input: Option<Input>) -> String {
+        let input = input.unwrap_or(Input::Resize(self.size));
+        state.handle_global_input(&input);
+        {
+            let mut ctx = self.tui.create_context(Some(input));
+            let r = draw::draw(&mut ctx, state);
+            state.apply_draw_result(r.term_size, r.menu_active);
+        }
+        while self.tui.needs_settling() {
+            let mut ctx = self.tui.create_context(None);
+            let r = draw::draw(&mut ctx, state);
+            state.apply_draw_result(r.term_size, r.menu_active);
+        }
+        self.tui.request_full_redraw();
+        let scratch = stdext::arena::scratch_arena(None);
+        self.tui.render(&scratch).to_string()
+    }
+
+    /// Like [`Self::frame`], returning the screen's rows as plain text.
+    fn rows(&mut self, state: &mut State, input: Option<Input>) -> Vec<String> {
+        let out = self.frame(state, input);
+        let mut rows = vec![vec![' '; self.size.width as usize]; self.size.height as usize];
+        let (mut y, mut x) = (0, 0);
+        let mut chars = out.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c != '\x1b' {
+                if let Some(cell) = rows.get_mut(y).and_then(|r| r.get_mut(x)) {
+                    *cell = c;
+                }
+                x += 1;
+                continue;
+            }
+            // CSI: parameters, then a final byte. Only cursor moves matter.
+            chars.next();
+            let mut params = String::new();
+            for d in chars.by_ref() {
+                if d.is_ascii_alphabetic() || d == '~' {
+                    if d == 'H' {
+                        let mut it = params.split(';').map(|n| n.parse().unwrap_or(1usize));
+                        y = it.next().unwrap_or(1) - 1;
+                        x = it.next().unwrap_or(1) - 1;
+                    }
+                    break;
+                }
+                params.push(d);
+            }
+        }
+        rows.into_iter().map(|r| r.into_iter().collect()).collect()
+    }
+}
+
 fn render(state: &mut State) -> String {
-    let mut tui = Tui::new().unwrap();
-    let size = Size {
-        width: 60,
-        height: 8,
-    };
-    let scratch = stdext::arena::scratch_arena(None);
-    {
-        let mut ctx = tui.create_context(Some(Input::Resize(size)));
-        let r = draw::draw(&mut ctx, state);
-        state.apply_draw_result(r.term_size, r.menu_active);
-    }
-    while tui.needs_settling() {
-        let mut ctx = tui.create_context(None);
-        let r = draw::draw(&mut ctx, state);
-        state.apply_draw_result(r.term_size, r.menu_active);
-    }
-    tui.render(&scratch).to_string()
+    Screen::new(60, 8).frame(state, None)
 }
 
 fn test_state() -> State {
     let panel = || Panel::with_entries(PathBuf::from("/test"), vec![make_entry("..", true, 0)]);
     State::for_testing(panel(), panel())
+}
+
+fn click(x: CoordType, y: CoordType) -> Input<'static> {
+    Input::Mouse(InputMouse {
+        state: InputMouseState::Left,
+        modifiers: kbmod::NONE,
+        position: Point { x, y },
+        scroll: Point { x: 0, y: 0 },
+        drag: false,
+    })
 }
 
 #[test]
@@ -53,4 +116,30 @@ fn test_command_line_suggestion_is_dimmed() {
     let sgr = format!("\x1b[38;2;{};{};{}m", dim.red(), dim.green(), dim.blue());
     assert!(between.contains(&sgr), "{between:?} lacks {sgr:?}");
     assert!(between.contains("\x1b[4mg"), "{between:?}");
+}
+
+#[test]
+fn test_click_in_scrolled_list_dialog_picks_the_entry_under_the_mouse() {
+    let mut s = test_state();
+    // More entries than fit: the dialog is clamped to the screen and scrolls.
+    s.dir_history = (0..30)
+        .map(|i| PathBuf::from(format!("/dir{i:02}")))
+        .collect();
+    s.execute_action(Action::DirHistory);
+    for _ in 0..25 {
+        s.handle_global_input(&Input::Keyboard(vk::DOWN));
+    }
+    let mut screen = Screen::new(80, 24);
+    let mut rows = screen.rows(&mut s, None);
+    for target in ["/dir25", "/dir12", "/dir00"] {
+        let y = rows
+            .iter()
+            .position(|r| r.contains(target))
+            .unwrap_or_else(|| panic!("{target} not on screen:\n{}", rows.join("\n")));
+        rows = screen.rows(&mut s, Some(click(40, y as CoordType)));
+        let Dialog::ListSelect { labels, cursor, .. } = &s.dialog else {
+            panic!("the click closed the dialog");
+        };
+        assert_eq!(labels[*cursor], target);
+    }
 }

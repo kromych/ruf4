@@ -1356,9 +1356,12 @@ impl State {
                 return;
             };
             let is_double = detect_double_click(&mut self.last_click, mouse.position);
-            if let Some(idx) =
-                list_dialog_hit_index(mouse.position.y, labels.len(), self.term_size.height)
-            {
+            if let Some(idx) = list_dialog_hit_index(
+                mouse.position.y,
+                labels.len(),
+                *cursor,
+                self.term_size.height,
+            ) {
                 *cursor = idx;
                 if is_double {
                     self.commit_list_select();
@@ -1582,19 +1585,34 @@ fn list_nav_key(key: InputKey, cursor: &mut usize, len: usize) {
     }
 }
 
+/// Rows of entries a list dialog has room for: its height is clamped to the
+/// terminal, so a long list scrolls. Drawing and hit-testing share this.
+pub fn list_dialog_rows(entry_count: usize, term_height: CoordType) -> usize {
+    let content_h = (entry_count as CoordType + LIST_DIALOG_CONTENT_PAD).min(term_height - 4);
+    (content_h - 3).max(0) as usize
+}
+
+/// First entry a list dialog shows: just enough scrolling to keep the cursor
+/// in view.
+pub fn list_dialog_scroll(cursor: usize, rows: usize) -> usize {
+    (cursor + 1).saturating_sub(rows)
+}
+
 pub fn list_dialog_hit_index(
     mouse_y: CoordType,
     entry_count: usize,
+    cursor: usize,
     term_height: CoordType,
 ) -> Option<usize> {
-    let h = entry_count as CoordType + LIST_DIALOG_CONTENT_PAD + LIST_DIALOG_BORDER;
-    let dialog_top = (term_height - h) / 2;
-    let entry_start = dialog_top + LIST_DIALOG_ENTRY_OFFSET;
-    if mouse_y >= entry_start && ((mouse_y - entry_start) as usize) < entry_count {
-        Some((mouse_y - entry_start) as usize)
-    } else {
-        None
+    let content_h = (entry_count as CoordType + LIST_DIALOG_CONTENT_PAD).min(term_height - 4);
+    let dialog_top = (term_height - content_h - LIST_DIALOG_BORDER) / 2;
+    let row = mouse_y - (dialog_top + LIST_DIALOG_ENTRY_OFFSET);
+    let rows = list_dialog_rows(entry_count, term_height);
+    if row < 0 || row as usize >= rows {
+        return None;
     }
+    let idx = list_dialog_scroll(cursor, rows) + row as usize;
+    (idx < entry_count).then_some(idx)
 }
 
 /// Help dialog has no prompt line. Layout:
