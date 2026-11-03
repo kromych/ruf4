@@ -776,7 +776,9 @@ pub fn copy_symlink(src: &Path, dst: &Path) -> std::io::Result<()> {
     }
     #[cfg(windows)]
     {
-        if link_target.is_dir() {
+        // Ask the link itself: a relative target can't be resolved from here.
+        use std::os::windows::fs::FileTypeExt;
+        if fs::symlink_metadata(src)?.file_type().is_symlink_dir() {
             std::os::windows::fs::symlink_dir(&link_target, dst)
         } else {
             std::os::windows::fs::symlink_file(&link_target, dst)
