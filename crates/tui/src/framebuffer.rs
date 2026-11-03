@@ -451,6 +451,13 @@ impl Framebuffer {
     /// last call to `flip()` and returns them serialized as VT.
     pub fn render<'a>(&mut self, arena: &'a Arena) -> BString<'a> {
         let idx = self.frame_counter & 1;
+
+        // Nothing to draw without a size (e.g. if the terminal never reported one).
+        // It also keeps a width of 0 away from `chunks_exact` in the row iterators below.
+        if self.buffers[idx].bg_bitmap.size.as_rect().is_empty() {
+            return BString::empty();
+        }
+
         // Borrows the front/back buffers without letting Rust know that we have a reference to self.
         // SAFETY: Well this is certainly correct, but whether Rust and its strict rules likes it is another question.
         let (back, front) = unsafe {
@@ -1037,5 +1044,22 @@ mod tests {
 
         // The flag is one-shot: the next unchanged frame is quiet again.
         assert!(!frame(&mut fb, &arena, size, "hello"));
+    }
+
+    #[test]
+    fn render_without_size_draws_nothing() {
+        let arena = Arena::new(4 * stdext::MEBI).unwrap();
+        let mut fb = Framebuffer::new();
+
+        // Before the first flip, and while the terminal hasn't reported a size.
+        assert!(fb.render(&arena).is_empty());
+        assert!(!frame(&mut fb, &arena, Size::default(), "hello"));
+
+        // Once a size arrives, the whole screen gets drawn.
+        let size = Size {
+            width: 12,
+            height: 3,
+        };
+        assert!(frame(&mut fb, &arena, size, "hello"));
     }
 }
