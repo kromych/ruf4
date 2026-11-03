@@ -448,9 +448,12 @@ impl State {
                 }
             })
             .collect();
-        let dir = std::env::temp_dir().join("ruf4-remote").join(host_tag);
-        let target = match std::fs::create_dir_all(&dir).and_then(|()| vfs::join_child(&dir, name))
-        {
+        let target = platform::private_temp_dir("ruf4-remote")
+            .map(|dir| dir.join(host_tag))
+            .and_then(|dir| {
+                std::fs::create_dir_all(&dir).and_then(|()| vfs::join_child(&dir, name))
+            });
+        let target = match target {
             Ok(target) => target,
             Err(e) => {
                 self.dialog = Dialog::Error {

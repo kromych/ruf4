@@ -657,6 +657,39 @@ fn shell_open(path: &Path) -> std::io::Result<()> {
     }
 }
 
+/// A directory `name` under the temporary directory that only the current
+/// user can access. On Unix that's shared: a directory someone else created
+/// first, e.g. to plant symlinks to the user's files, is refused.
+pub fn private_temp_dir(name: &str) -> std::io::Result<PathBuf> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+
+        // SAFETY: geteuid() has no preconditions and cannot fail.
+        let uid = unsafe { libc::geteuid() };
+        let dir = std::env::temp_dir().join(format!("{name}-{uid}"));
+        match fs::DirBuilder::new().mode(0o700).create(&dir) {
+            Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => return Err(e),
+            _ => {}
+        }
+        let meta = fs::symlink_metadata(&dir)?;
+        if !meta.is_dir() || meta.uid() != uid || meta.mode() & 0o077 != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!("{} is not a private directory", dir.display()),
+            ));
+        }
+        Ok(dir)
+    }
+    #[cfg(not(unix))]
+    {
+        // The temporary directory is per user.
+        let dir = std::env::temp_dir().join(name);
+        fs::create_dir_all(&dir)?;
+        Ok(dir)
+    }
+}
+
 /// Home directory.
 pub fn home_dir() -> PathBuf {
     #[cfg(unix)]
