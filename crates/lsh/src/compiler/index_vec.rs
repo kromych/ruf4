@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 //! Vectors indexed by distinct, checked index types.
 
 use std::marker::PhantomData;

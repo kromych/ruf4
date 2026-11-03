@@ -1,3 +1,9 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+//
+// Portions derived from the Microsoft Edit project (https://github.com/microsoft/edit).
+// See LICENSE-EDIT for the original MIT license.
+
 mod definitions;
 
 use std::path::Path;

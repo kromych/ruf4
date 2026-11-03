@@ -1,3 +1,6 @@
+// Copyright (c) 2026 ruf4 contributors.
+// Licensed under the MIT License.
+
 // Stub module providing editor buffer types needed by tui.rs.
 // These are unused in ruf4 but required for compilation.
 // The actual implementations live in Microsoft Edit's edit crate.

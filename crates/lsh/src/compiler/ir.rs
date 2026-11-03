@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 //! Shared program representation and graph construction, independent of compilation phases.
 
 use std::collections::{HashSet, VecDeque};

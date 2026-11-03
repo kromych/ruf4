@@ -1,3 +1,6 @@
+// Copyright (c) 2026 ruf4 contributors.
+// Licensed under the MIT License.
+
 use std::path::PathBuf;
 
 use ruf4::panel::{Panel, SortBy, SortDir, format_size, glob_match, make_entry};

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 ruf4 contributors.
+// Licensed under the MIT License.
+
 fn main() {
     #[cfg(target_os = "windows")]
     {
