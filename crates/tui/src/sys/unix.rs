@@ -156,12 +156,21 @@ pub struct Deinit;
 
 impl Drop for Deinit {
     fn drop(&mut self) {
-        unsafe {
-            #[allow(static_mut_refs)]
-            if let Some(termios) = STATE.stdout_initial_termios.take() {
-                // Restore the original terminal modes.
-                libc::tcsetattr(STATE.stdout, libc::TCSANOW, &termios);
-            }
+        restore_modes();
+    }
+}
+
+/// Permanently restores the terminal modes present before [`switch_modes`].
+///
+/// [`Deinit`] does this on drop, but with `panic = "abort"` destructors don't run,
+/// so call this from a panic hook as well. It doesn't allocate, is idempotent, and
+/// does nothing if [`switch_modes`] wasn't called.
+pub fn restore_modes() {
+    unsafe {
+        #[allow(static_mut_refs)]
+        if let Some(termios) = STATE.stdout_initial_termios.take() {
+            // Restore the original terminal modes.
+            libc::tcsetattr(STATE.stdout, libc::TCSANOW, &termios);
         }
     }
 }

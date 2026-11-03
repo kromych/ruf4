@@ -216,23 +216,32 @@ pub struct Deinit;
 
 impl Drop for Deinit {
     fn drop(&mut self) {
-        unsafe {
-            if STATE.stdin_cp_old != 0 {
-                Console::SetConsoleCP(STATE.stdin_cp_old);
-                STATE.stdin_cp_old = 0;
-            }
-            if STATE.stdout_cp_old != 0 {
-                Console::SetConsoleOutputCP(STATE.stdout_cp_old);
-                STATE.stdout_cp_old = 0;
-            }
-            if STATE.stdin_mode_old != INVALID_CONSOLE_MODE {
-                Console::SetConsoleMode(STATE.stdin, STATE.stdin_mode_old);
-                STATE.stdin_mode_old = INVALID_CONSOLE_MODE;
-            }
-            if STATE.stdout_mode_old != INVALID_CONSOLE_MODE {
-                Console::SetConsoleMode(STATE.stdout, STATE.stdout_mode_old);
-                STATE.stdout_mode_old = INVALID_CONSOLE_MODE;
-            }
+        restore_modes();
+    }
+}
+
+/// Permanently restores the code pages and console modes present before [`switch_modes`].
+///
+/// [`Deinit`] does this on drop, but with `panic = "abort"` destructors don't run,
+/// so call this from a panic hook as well. It doesn't allocate, is idempotent, and
+/// does nothing if [`switch_modes`] wasn't called.
+pub fn restore_modes() {
+    unsafe {
+        if STATE.stdin_cp_old != 0 {
+            Console::SetConsoleCP(STATE.stdin_cp_old);
+            STATE.stdin_cp_old = 0;
+        }
+        if STATE.stdout_cp_old != 0 {
+            Console::SetConsoleOutputCP(STATE.stdout_cp_old);
+            STATE.stdout_cp_old = 0;
+        }
+        if STATE.stdin_mode_old != INVALID_CONSOLE_MODE {
+            Console::SetConsoleMode(STATE.stdin, STATE.stdin_mode_old);
+            STATE.stdin_mode_old = INVALID_CONSOLE_MODE;
+        }
+        if STATE.stdout_mode_old != INVALID_CONSOLE_MODE {
+            Console::SetConsoleMode(STATE.stdout, STATE.stdout_mode_old);
+            STATE.stdout_mode_old = INVALID_CONSOLE_MODE;
         }
     }
 }

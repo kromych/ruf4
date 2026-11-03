@@ -53,7 +53,16 @@ fn run() -> std::io::Result<()> {
 
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        sys::write_stdout(platform::TUI_LEAVE_SEQ);
+        // Hand the terminal back if this panic ends the process. A worker
+        // thread unwinding (debug builds) doesn't: its job reports the failure
+        // and the UI carries on.
+        if cfg!(panic = "abort") || std::thread::current().name() == Some("main") {
+            sys::write_stdout(platform::TUI_LEAVE_SEQ);
+            // With `panic = "abort"`, `_sys_deinit` never gets dropped. Leave raw
+            // mode here instead, which also lets the message below print in
+            // cooked mode.
+            sys::restore_modes();
+        }
         default_hook(info);
     }));
 
