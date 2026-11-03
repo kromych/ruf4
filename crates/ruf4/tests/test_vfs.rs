@@ -310,20 +310,22 @@ fn live_ssh_end_to_end() {
 
     // Work in an isolated subtree.
     let work = join(&root, &format!("ruf4-e2e-{}", std::process::id()));
-    vfs::create_dir_all(&work).expect("mkdir");
+    vfs::create_dir_all(&work, Some(0o700)).expect("mkdir");
     assert!(vfs::is_dir(&work));
+    assert_eq!(vfs::symlink_meta(&work).unwrap().mode, Some(0o700));
 
     // Write, stat, and read back a file crossing the chunk size.
     let file = join(&work, "data.bin");
     let payload: Vec<u8> = (0..100_000).map(|i| (i % 251) as u8).collect();
     {
-        let mut w = vfs::open_write(&file).expect("open for write");
+        let mut w = vfs::open_write(&file, Some(0o600)).expect("open for write");
         w.write_all(&payload).unwrap();
         w.flush().unwrap();
     }
     assert!(vfs::exists(&file));
     let meta = vfs::symlink_meta(&file).unwrap();
     assert_eq!(meta.size, payload.len() as u64);
+    assert_eq!(meta.mode, Some(0o600));
     let (prefix, size) = vfs::read_prefix(&file, 4096).unwrap();
     assert_eq!(size, payload.len() as u64);
     assert_eq!(prefix, payload[..4096]);

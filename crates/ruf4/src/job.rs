@@ -360,7 +360,7 @@ fn copy_tree_inner(
                     "cannot copy directory into itself",
                 ));
             }
-            vfs::create_dir_all(dst)?;
+            vfs::create_dir_all(dst, meta.mode)?;
             for (child, child_meta) in vfs::read_dir_meta(src)? {
                 if cancelled(cancel) {
                     return Ok(());
@@ -382,7 +382,7 @@ fn copy_tree_inner(
             } else {
                 prog.current = fileops::base_name(src).into_owned();
                 let _ = tx.send(JobEvent::Progress(prog.clone()));
-                copy_file_stream(src, dst, prog, tx, cancel)?;
+                copy_file_stream(src, dst, meta.mode, prog, tx, cancel)?;
                 bump(prog, src, 0, tx);
             }
         }
@@ -399,12 +399,13 @@ const STREAM_PROGRESS_INTERVAL: u64 = 32;
 fn copy_file_stream(
     src: &Path,
     dst: &Path,
+    mode: Option<u32>,
     prog: &mut Progress,
     tx: &Sender<JobEvent>,
     cancel: &AtomicBool,
 ) -> std::io::Result<()> {
     let mut reader = vfs::open_read(src)?;
-    let mut writer = vfs::open_write(dst)?;
+    let mut writer = vfs::open_write(dst, mode)?;
     let mut buf = vec![0u8; sftp::MAX_DATA];
     let mut chunks = 0u64;
     loop {

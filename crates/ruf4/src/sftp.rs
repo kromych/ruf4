@@ -91,6 +91,17 @@ fn put_str(buf: &mut Vec<u8>, s: &str) {
     put_bytes(buf, s.as_bytes());
 }
 
+/// ATTRS holding just the permissions, or nothing.
+fn put_mode_attrs(buf: &mut Vec<u8>, mode: Option<u32>) {
+    match mode {
+        Some(mode) => {
+            put_u32(buf, ATTR_PERMISSIONS);
+            put_u32(buf, mode);
+        }
+        None => put_u32(buf, 0),
+    }
+}
+
 fn truncated() -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, "sftp: truncated packet")
 }
@@ -451,10 +462,20 @@ impl<T: Read + Write> Client<T> {
 
     /// Open a file and return its handle.
     pub fn open(&mut self, path: &str, pflags: u32) -> io::Result<Vec<u8>> {
+        self.open_with_mode(path, pflags, None)
+    }
+
+    /// Like [`Self::open`], with the permissions for a file it creates.
+    pub fn open_with_mode(
+        &mut self,
+        path: &str,
+        pflags: u32,
+        mode: Option<u32>,
+    ) -> io::Result<Vec<u8>> {
         let mut body = Vec::new();
         put_str(&mut body, path);
         put_u32(&mut body, pflags);
-        put_u32(&mut body, 0); // empty attrs
+        put_mode_attrs(&mut body, mode);
         let (rtype, payload) = self.request(SSH_FXP_OPEN, &body)?;
         match rtype {
             SSH_FXP_HANDLE => Ok(Reader::new(&payload).bytes()?.to_vec()),
@@ -502,9 +523,13 @@ impl<T: Read + Write> Client<T> {
     }
 
     pub fn mkdir(&mut self, path: &str) -> io::Result<()> {
+        self.mkdir_with_mode(path, None)
+    }
+
+    pub fn mkdir_with_mode(&mut self, path: &str, mode: Option<u32>) -> io::Result<()> {
         let mut body = Vec::new();
         put_str(&mut body, path);
-        put_u32(&mut body, 0); // empty attrs
+        put_mode_attrs(&mut body, mode);
         self.request_status(SSH_FXP_MKDIR, &body)
     }
 

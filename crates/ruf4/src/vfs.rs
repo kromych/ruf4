@@ -664,6 +664,8 @@ pub enum Kind {
 pub struct Meta {
     pub kind: Kind,
     pub size: u64,
+    /// Permission bits (`0o777`), where the filesystem has them.
+    pub mode: Option<u32>,
 }
 
 fn meta_from_attrs(attrs: &sftp::Attrs) -> Meta {
@@ -677,6 +679,20 @@ fn meta_from_attrs(attrs: &sftp::Attrs) -> Meta {
     Meta {
         kind,
         size: attrs.size.unwrap_or(0),
+        mode: attrs.permissions.map(|p| p & 0o777),
+    }
+}
+
+fn local_mode(meta: &fs::Metadata) -> Option<u32> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        Some(meta.permissions().mode() & 0o777)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        None
     }
 }
 
@@ -697,6 +713,7 @@ pub fn symlink_meta(path: &Path) -> io::Result<Meta> {
             Ok(Meta {
                 kind,
                 size: meta.len(),
+                mode: local_mode(&meta),
             })
         }
     }
@@ -874,14 +891,15 @@ pub fn read_dir_meta(path: &Path) -> io::Result<Vec<(String, Meta)>> {
                 } else {
                     Kind::File
                 };
-                let size = if kind == Kind::File {
-                    entry.metadata().map(|m| m.len()).unwrap_or(0)
-                } else {
-                    0
+                let meta = entry.metadata().ok();
+                let size = match &meta {
+                    Some(m) if kind == Kind::File => m.len(),
+                    _ => 0,
                 };
+                let mode = meta.as_ref().and_then(local_mode);
                 out.push((
                     entry.file_name().to_string_lossy().into_owned(),
-                    Meta { kind, size },
+                    Meta { kind, size, mode },
                 ));
             }
             Ok(out)
@@ -892,7 +910,9 @@ pub fn read_dir_meta(path: &Path) -> io::Result<Vec<(String, Meta)>> {
 // ── Mutations ───────────────────────────────────────────────────────────────
 
 /// Create a directory and any missing ancestors.
-pub fn create_dir_all(path: &Path) -> io::Result<()> {
+/// Create `path` and any missing parents. `mode` sets the permissions of
+/// `path` itself if it gets created; the system default applies otherwise.
+pub fn create_dir_all(path: &Path, mode: Option<u32>) -> io::Result<()> {
     match parse_remote(path) {
         Some(r) => with_conn(&r.host, |c| {
             let normalized = normalize_posix(&r.path);
@@ -908,12 +928,26 @@ pub fn create_dir_all(path: &Path) -> io::Result<()> {
                             format!("{cur}: exists and is not a directory"),
                         ));
                     }
-                    Err(e) if e.kind() == io::ErrorKind::NotFound => c.mkdir(&cur)?,
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                        let mode = if cur == normalized { mode } else { None };
+                        c.mkdir_with_mode(&cur, mode)?
+                    }
                     Err(e) => return Err(e),
                 }
             }
             Ok(())
         }),
+        #[cfg(unix)]
+        None if let Some(mode) = mode => {
+            use std::os::unix::fs::DirBuilderExt;
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            match fs::DirBuilder::new().mode(mode).create(path) {
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists && path.is_dir() => Ok(()),
+                result => result,
+            }
+        }
         None => fs::create_dir_all(path),
     }
 }
@@ -1114,18 +1148,31 @@ pub fn open_read(path: &Path) -> io::Result<Box<dyn Read>> {
     }
 }
 
-/// Create or truncate `path` for sequential writing.
-pub fn open_write(path: &Path) -> io::Result<Box<dyn Write>> {
+/// Create or truncate `path` for sequential writing. `mode` sets the
+/// permissions of a file this creates, so that a copy is never readable by
+/// more users than its source was, not even while it's being written.
+pub fn open_write(path: &Path, mode: Option<u32>) -> io::Result<Box<dyn Write>> {
     match parse_remote(path) {
         Some(r) => {
             let flags = sftp::OPEN_WRITE | sftp::OPEN_CREAT | sftp::OPEN_TRUNC;
-            let handle = with_conn(&r.host, |c| c.open(&r.path, flags))?;
+            let handle = with_conn(&r.host, |c| c.open_with_mode(&r.path, flags, mode))?;
             Ok(Box::new(RemoteWriter {
                 host: r.host,
                 handle,
                 offset: 0,
                 closed: false,
             }))
+        }
+        #[cfg(unix)]
+        None if let Some(mode) = mode => {
+            use std::os::unix::fs::OpenOptionsExt;
+            let file = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(mode)
+                .open(path)?;
+            Ok(Box::new(file))
         }
         None => Ok(Box::new(fs::File::create(path)?)),
     }

@@ -29,7 +29,8 @@ pub fn same_file_error(name: &str, is_copy: bool) -> String {
 }
 
 pub fn ops_mkdir(path: &Path) -> Result<(), String> {
-    vfs::create_dir_all(path).map_err(|e| format!("Cannot create \"{}\": {e}", path.display()))
+    vfs::create_dir_all(path, None)
+        .map_err(|e| format!("Cannot create \"{}\": {e}", path.display()))
 }
 
 pub fn ops_delete(paths: &[PathBuf]) -> Vec<String> {
