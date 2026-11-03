@@ -545,15 +545,24 @@ pub fn run_foreground(
     })
 }
 
+/// `cmd.exe` set up to run `cmd` exactly as typed. cmd.exe doesn't parse its
+/// command line like other programs, so the usual argument quoting would turn
+/// `type "a b.txt"` into `"type \"a b.txt\""`. With `/S`, cmd.exe strips one
+/// pair of outer quotes and runs the rest verbatim.
+#[cfg(windows)]
+fn cmd_exe(cmd: &str) -> Command {
+    use std::os::windows::process::CommandExt;
+
+    let mut c = Command::new("cmd.exe");
+    c.raw_arg(format!("/S /C \"{cmd}\""));
+    c
+}
+
 /// Run a shell command in the foreground with the terminal handed back to it.
 /// The exit status is not treated as an error; the user saw the output.
 pub fn run_interactive(cmd: &str, cwd: &Path) -> Result<(), String> {
     #[cfg(windows)]
-    let mut command = {
-        let mut c = Command::new("cmd.exe");
-        c.arg("/C").arg(cmd);
-        c
-    };
+    let mut command = cmd_exe(cmd);
     #[cfg(not(windows))]
     let mut command = {
         let mut c = Command::new("sh");
@@ -573,11 +582,7 @@ pub fn run_command(cmd: &str, cwd: &Path) -> Result<(String, i32), String> {
         .output();
 
     #[cfg(windows)]
-    let output = Command::new("cmd.exe")
-        .arg("/C")
-        .arg(cmd)
-        .current_dir(cwd)
-        .output();
+    let output = cmd_exe(cmd).current_dir(cwd).output();
 
     #[cfg(not(any(unix, windows)))]
     let output = Command::new("sh")
@@ -609,20 +614,47 @@ pub fn run_command(cmd: &str, cwd: &Path) -> Result<(String, i32), String> {
 /// Open a file with the system-associated application.
 pub fn open_file(path: &Path) -> Result<(), String> {
     #[cfg(target_os = "macos")]
-    let result = Command::new("open").arg(path).spawn();
+    let result = Command::new("open").arg(path).spawn().map(|_| ());
 
     #[cfg(target_os = "windows")]
-    let result = Command::new("cmd")
-        .args(["/C", "start", ""])
-        .arg(path)
-        .spawn();
+    let result = shell_open(path);
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let result = Command::new("xdg-open").arg(path).spawn();
+    let result = Command::new("xdg-open").arg(path).spawn().map(|_| ());
 
-    result
-        .map(|_| ())
-        .map_err(|e| format!("Cannot open \"{}\": {e}", path.display()))
+    result.map_err(|e| format!("Cannot open \"{}\": {e}", path.display()))
+}
+
+/// Open `path` through the shell's file associations. Unlike `cmd /C start`,
+/// this doesn't interpret `&`, `^` or `%` in the name, which can come from a
+/// remote server: opening a download named `x&calc` would run `calc`.
+#[cfg(windows)]
+fn shell_open(path: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr;
+
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let file: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+    // SAFETY: `file` is NUL-terminated and outlives the call. Null pointers
+    // select the default verb and no parameters or working directory.
+    let result = unsafe {
+        ShellExecuteW(
+            ptr::null_mut(),
+            ptr::null(),
+            file.as_ptr(),
+            ptr::null(),
+            ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    // Anything above 32 means success, the rest are error codes.
+    if result as usize > 32 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
 }
 
 /// Home directory.
