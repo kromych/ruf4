@@ -62,6 +62,7 @@ pub const OPEN_TRUNC: u32 = 0x0000_0010;
 const S_IFMT: u32 = 0o170000;
 const S_IFDIR: u32 = 0o040000;
 const S_IFLNK: u32 = 0o120000;
+const S_IFREG: u32 = 0o100000;
 
 /// Upper bound on a single packet, matching OpenSSH's limit.
 const MAX_PACKET: usize = 256 * 1024;
@@ -182,6 +183,12 @@ impl Attrs {
 
     pub fn is_symlink(&self) -> bool {
         self.permissions.is_some_and(|p| p & S_IFMT == S_IFLNK)
+    }
+
+    /// A FIFO, socket or device. Servers that send no type count as regular.
+    pub fn is_special(&self) -> bool {
+        self.permissions
+            .is_some_and(|p| !matches!(p & S_IFMT, 0 | S_IFREG | S_IFDIR | S_IFLNK))
     }
 }
 

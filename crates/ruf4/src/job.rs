@@ -9,6 +9,7 @@
 //! the terminal (`sys`), or the scratch arena. The pure file primitives in
 //! `fileops` are reused for the actual work.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -210,184 +211,295 @@ fn cancelled(cancel: &AtomicBool) -> bool {
 fn run_copy_move(
     pairs: Vec<(PathBuf, PathBuf)>,
     is_copy: bool,
-    mut overwrite_all: bool,
+    overwrite_all: bool,
     tx: &Sender<JobEvent>,
     rx: &Receiver<Decision>,
     cancel: &AtomicBool,
 ) {
     // Pre-scan each pair so the gauge reflects total files and bytes.
     let counts: Vec<(u64, u64)> = pairs.iter().map(|(src, _)| vfs::scan_tree(src)).collect();
-    let mut prog = Progress {
-        files_total: counts.iter().map(|c| c.0).sum(),
-        bytes_total: counts.iter().map(|c| c.1).sum(),
-        ..Progress::default()
+    let mut t = Transfer {
+        is_copy,
+        overwrite_all,
+        stopped: false,
+        prog: Progress {
+            files_total: counts.iter().map(|c| c.0).sum(),
+            bytes_total: counts.iter().map(|c| c.1).sum(),
+            ..Progress::default()
+        },
+        errors: Vec::new(),
+        root: PathBuf::new(),
+        written: HashMap::new(),
+        tx,
+        rx,
+        cancel,
     };
 
-    let mut errors = Vec::new();
-
-    for (i, (src, target)) in pairs.iter().enumerate() {
-        if cancelled(cancel) {
+    for ((src, target), count) in pairs.iter().zip(counts) {
+        if t.stopped() {
             break;
         }
-
         if fileops::same_file(src, target) {
-            errors.push(fileops::same_file_error(&fileops::base_name(src), is_copy));
-            advance(&mut prog, counts[i]);
-            let _ = tx.send(JobEvent::Progress(prog.clone()));
+            t.errors
+                .push(fileops::same_file_error(&fileops::base_name(src), is_copy));
+            t.skip(count);
             continue;
         }
-
-        if !overwrite_all && vfs::exists(target) {
-            let name = fileops::base_name(target).into_owned();
-            let _ = tx.send(JobEvent::NeedOverwrite(name));
-            match rx.recv() {
-                Ok(Decision::Overwrite) => {}
-                Ok(Decision::OverwriteAll) => overwrite_all = true,
-                Ok(Decision::Skip) => {
-                    advance(&mut prog, counts[i]);
-                    let _ = tx.send(JobEvent::Progress(prog.clone()));
-                    continue;
-                }
-                Ok(Decision::Cancel) | Err(RecvError) => break,
+        t.root = vfs::parent(target).unwrap_or_default();
+        match vfs::symlink_meta(src) {
+            Ok(meta) => {
+                t.transfer(src, target, meta, Some(count));
             }
-        }
-
-        copy_move_one(
-            src,
-            target,
-            is_copy,
-            counts[i],
-            &mut prog,
-            tx,
-            cancel,
-            &mut errors,
-        );
-    }
-
-    let _ = tx.send(JobEvent::Finished { errors });
-}
-
-/// Execute one top-level (src, target) pair, reporting per-file progress.
-#[allow(clippy::too_many_arguments)]
-fn copy_move_one(
-    src: &Path,
-    target: &Path,
-    is_copy: bool,
-    count: (u64, u64),
-    prog: &mut Progress,
-    tx: &Sender<JobEvent>,
-    cancel: &AtomicBool,
-    errors: &mut Vec<String>,
-) {
-    let name = fileops::base_name(src).into_owned();
-    if is_copy {
-        if let Err(e) = copy_tree(src, target, prog, tx, cancel) {
-            errors.push(format!("{name}: {e}"));
-        }
-        return;
-    }
-
-    // Move: try a rename first; it is atomic and instant within one
-    // filesystem domain.
-    if vfs::same_domain(src, target) {
-        match vfs::rename(src, target) {
-            Ok(()) => {
-                prog.current = name;
-                advance(prog, count);
-                let _ = tx.send(JobEvent::Progress(prog.clone()));
-                return;
-            }
-            // A local rename across devices falls back to copy + remove. A
-            // failed remote rename carries no distinguishable error code, so
-            // it falls back the same way; a real error resurfaces from the copy.
-            Err(e) if vfs::is_remote(src) || is_cross_device(&e) => {}
             Err(e) => {
-                errors.push(format!("{name}: {e}"));
-                return;
+                t.fail(target, e);
+                t.skip(count);
             }
         }
     }
 
-    // Copy + remove: across domains, or a same-domain rename fell through.
-    if let Err(e) = copy_tree(src, target, prog, tx, cancel) {
-        errors.push(format!("{name}: {e}"));
-        return;
-    }
-    if cancelled(cancel) {
-        return;
-    }
-    if let Err(e) = vfs::remove_tree(src) {
-        errors.push(format!("{name}: {e}"));
-    }
+    let _ = tx.send(JobEvent::Finished { errors: t.errors });
 }
 
-/// Recursively copy `src` to `dst`, reporting progress and honouring
-/// cancellation. Mirrors `fileops::copy_dir_recursive` but per file, so a
-/// large copy stays cancellable and the gauge advances smoothly. Either side
-/// may be remote; remote-to-remote copies stream through this host.
-fn copy_tree(
-    src: &Path,
-    dst: &Path,
-    prog: &mut Progress,
-    tx: &Sender<JobEvent>,
-    cancel: &AtomicBool,
-) -> std::io::Result<()> {
-    let meta = vfs::symlink_meta(src)?;
-    copy_tree_inner(src, dst, meta, prog, tx, cancel)
+/// Worker-side state of one copy or move job.
+struct Transfer<'a> {
+    is_copy: bool,
+    overwrite_all: bool,
+    /// The user cancelled at an overwrite prompt.
+    stopped: bool,
+    prog: Progress,
+    errors: Vec<String>,
+    /// Parent of the current top-level target; names are shown relative to it.
+    root: PathBuf,
+    /// Everything this job created, keyed by the lowercased path. On a
+    /// case-insensitive destination, `Makefile` and `makefile` from one source
+    /// land on the same file; the second must not replace the first.
+    written: HashMap<String, PathBuf>,
+    tx: &'a Sender<JobEvent>,
+    rx: &'a Receiver<Decision>,
+    cancel: &'a AtomicBool,
 }
 
-fn copy_tree_inner(
-    src: &Path,
-    dst: &Path,
-    meta: vfs::Meta,
-    prog: &mut Progress,
-    tx: &Sender<JobEvent>,
-    cancel: &AtomicBool,
-) -> std::io::Result<()> {
-    if cancelled(cancel) {
-        return Ok(());
+impl Transfer<'_> {
+    fn stopped(&self) -> bool {
+        self.stopped || cancelled(self.cancel)
     }
 
-    match meta.kind {
-        vfs::Kind::Symlink => {
-            vfs::copy_symlink(src, dst)?;
-            bump(prog, src, 0, tx);
+    fn rel(&self, path: &Path) -> String {
+        path.strip_prefix(&self.root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn fail(&mut self, target: &Path, e: impl std::fmt::Display) {
+        let msg = format!("{}: {e}", self.rel(target));
+        self.errors.push(msg);
+    }
+
+    /// Count `count` (files, bytes) as done without transferring them.
+    fn skip(&mut self, count: (u64, u64)) {
+        advance(&mut self.prog, count);
+        let _ = self.tx.send(JobEvent::Progress(self.prog.clone()));
+    }
+
+    /// Copy or move `src` to `target`, asking before replacing anything that
+    /// isn't a directory to merge with. `count` is the (files, bytes) of `src`
+    /// if known. Returns whether all of `src` arrived: only then does a move
+    /// remove it, so whatever was skipped or failed stays at the source.
+    fn transfer(
+        &mut self,
+        src: &Path,
+        target: &Path,
+        meta: vfs::Meta,
+        count: Option<(u64, u64)>,
+    ) -> bool {
+        if self.stopped() {
+            return false;
         }
-        vfs::Kind::Dir => {
-            if vfs::dir_contains(src, dst) {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "cannot copy directory into itself",
-                ));
+        let count_now = || match count {
+            Some(count) => count,
+            None if meta.kind == vfs::Kind::Dir => vfs::scan_tree(src),
+            None => (1, meta.size),
+        };
+        if meta.kind == vfs::Kind::Other {
+            // Opening a FIFO blocks until someone writes to it.
+            self.fail(
+                target,
+                "not a regular file (pipe, socket or device), skipped",
+            );
+            self.skip(count_now());
+            return false;
+        }
+
+        let mut merge = false;
+        if let Ok(existing) = vfs::symlink_meta(target) {
+            let key = target.to_string_lossy().to_lowercase();
+            if let Some(other) = self.written.get(&key)
+                && other != target
+                && vfs::same_file(other, target)
+            {
+                let msg = format!(
+                    "same name as {} on this destination, which ignores case; skipped",
+                    self.rel(other)
+                );
+                self.fail(target, msg);
+                self.skip(count_now());
+                return false;
             }
-            vfs::create_dir_all(dst, meta.mode)?;
-            for (child, child_meta) in vfs::read_dir_meta(src)? {
-                if cancelled(cancel) {
-                    return Ok(());
+            match (meta.kind, existing.kind) {
+                (vfs::Kind::Dir, vfs::Kind::Dir) => merge = true,
+                (vfs::Kind::Dir, _) | (_, vfs::Kind::Dir) => {
+                    let what = if existing.kind == vfs::Kind::Dir {
+                        "a directory"
+                    } else {
+                        "a file"
+                    };
+                    self.fail(target, format!("{what} of that name exists, skipped"));
+                    self.skip(count_now());
+                    return false;
                 }
-                copy_tree_inner(
-                    &vfs::join_child(src, &child)?,
-                    &vfs::join_child(dst, &child)?,
-                    child_meta,
-                    prog,
-                    tx,
-                    cancel,
-                )?;
+                _ => {
+                    if !self.overwrite_all {
+                        let _ = self.tx.send(JobEvent::NeedOverwrite(self.rel(target)));
+                        match self.rx.recv() {
+                            Ok(Decision::Overwrite) => {}
+                            Ok(Decision::OverwriteAll) => self.overwrite_all = true,
+                            Ok(Decision::Skip) => {
+                                self.skip(count_now());
+                                return false;
+                            }
+                            Ok(Decision::Cancel) | Err(RecvError) => {
+                                self.stopped = true;
+                                return false;
+                            }
+                        }
+                    }
+                    // A link is replaced rather than written through, and
+                    // nothing may be in the way of a new link.
+                    if (existing.kind == vfs::Kind::Symlink || meta.kind == vfs::Kind::Symlink)
+                        && let Err(e) = vfs::remove_tree(target)
+                    {
+                        self.fail(target, e);
+                        return false;
+                    }
+                }
             }
         }
-        vfs::Kind::File => {
-            if !vfs::is_remote(src) && !vfs::is_remote(dst) {
-                std::fs::copy(src, dst)?;
-                bump(prog, src, meta.size, tx);
-            } else {
-                prog.current = fileops::base_name(src).into_owned();
-                let _ = tx.send(JobEvent::Progress(prog.clone()));
-                copy_file_stream(src, dst, meta.mode, prog, tx, cancel)?;
-                bump(prog, src, 0, tx);
+        let key = target.to_string_lossy().to_lowercase();
+        self.written.insert(key, target.to_path_buf());
+
+        // A move tries a rename first: atomic and instant within one domain.
+        if !self.is_copy && !merge && vfs::same_domain(src, target) {
+            let count = count_now();
+            match vfs::rename(src, target) {
+                Ok(()) => {
+                    self.prog.current = fileops::base_name(src).into_owned();
+                    self.skip(count);
+                    return true;
+                }
+                // A local rename across devices falls back to copy + remove.
+                // A failed remote rename carries no distinguishable error
+                // code, so it falls back the same way; a real error
+                // resurfaces from the copy.
+                Err(e) if vfs::is_remote(src) || is_cross_device(&e) => {}
+                Err(e) => {
+                    self.fail(target, e);
+                    self.skip(count);
+                    return false;
+                }
+            }
+        }
+
+        let complete = match meta.kind {
+            vfs::Kind::Dir => self.transfer_dir(src, target, meta, merge),
+            vfs::Kind::Symlink => {
+                let result = vfs::copy_symlink(src, target);
+                self.bump(src, 0);
+                match result {
+                    Ok(()) => true,
+                    Err(e) => {
+                        self.fail(target, e);
+                        false
+                    }
+                }
+            }
+            _ => match self.copy_file(src, target, meta) {
+                Ok(complete) => complete,
+                Err(e) => {
+                    self.fail(target, e);
+                    false
+                }
+            },
+        };
+        if !complete || self.is_copy {
+            return complete;
+        }
+        // Everything arrived, so the source can go. A directory is empty by
+        // now, its contents having been moved one by one.
+        let removed = if meta.kind == vfs::Kind::Dir {
+            vfs::remove_dir(src)
+        } else {
+            vfs::remove_tree(src)
+        };
+        match removed {
+            Ok(()) => true,
+            Err(e) => {
+                self.fail(target, format!("copied, but the source stays: {e}"));
+                false
             }
         }
     }
-    Ok(())
+
+    fn transfer_dir(&mut self, src: &Path, target: &Path, meta: vfs::Meta, merge: bool) -> bool {
+        if vfs::dir_contains(src, target) {
+            self.fail(target, "cannot copy directory into itself");
+            return false;
+        }
+        if !merge && let Err(e) = vfs::create_dir_all(target, meta.mode) {
+            self.fail(target, e);
+            return false;
+        }
+        let children = match vfs::read_dir_meta(src) {
+            Ok(children) => children,
+            Err(e) => {
+                self.fail(target, e);
+                return false;
+            }
+        };
+        let mut complete = true;
+        for (name, child) in children {
+            if self.stopped() {
+                return false;
+            }
+            match (vfs::join_child(src, &name), vfs::join_child(target, &name)) {
+                (Ok(s), Ok(t)) => complete &= self.transfer(&s, &t, child, None),
+                (Err(e), _) | (_, Err(e)) => {
+                    self.fail(target, e);
+                    complete = false;
+                }
+            }
+        }
+        complete
+    }
+
+    /// Returns whether the whole file arrived, i.e. it wasn't cancelled.
+    fn copy_file(&mut self, src: &Path, target: &Path, meta: vfs::Meta) -> std::io::Result<bool> {
+        if !vfs::is_remote(src) && !vfs::is_remote(target) {
+            std::fs::copy(src, target)?;
+            self.bump(src, meta.size);
+            return Ok(true);
+        }
+        self.prog.current = fileops::base_name(src).into_owned();
+        let _ = self.tx.send(JobEvent::Progress(self.prog.clone()));
+        let complete =
+            copy_file_stream(src, target, meta.mode, &mut self.prog, self.tx, self.cancel)?;
+        self.bump(src, 0);
+        Ok(complete)
+    }
+
+    fn bump(&mut self, src: &Path, bytes: u64) {
+        bump(&mut self.prog, src, bytes, self.tx);
+    }
 }
 
 /// Report streamed progress every this many chunks (chunks are
@@ -395,7 +507,8 @@ fn copy_tree_inner(
 const STREAM_PROGRESS_INTERVAL: u64 = 32;
 
 /// Copy one file through read/write streams, advancing the byte gauge as
-/// chunks complete. Cancellation leaves a partial target, like the local path.
+/// chunks complete. Returns false if cancelled midway, which leaves a partial
+/// target, like the local path.
 fn copy_file_stream(
     src: &Path,
     dst: &Path,
@@ -403,14 +516,14 @@ fn copy_file_stream(
     prog: &mut Progress,
     tx: &Sender<JobEvent>,
     cancel: &AtomicBool,
-) -> std::io::Result<()> {
+) -> std::io::Result<bool> {
     let mut reader = vfs::open_read(src)?;
     let mut writer = vfs::open_write(dst, mode)?;
     let mut buf = vec![0u8; sftp::MAX_DATA];
     let mut chunks = 0u64;
     loop {
         if cancelled(cancel) {
-            return Ok(());
+            return Ok(false);
         }
         let n = reader.read(&mut buf)?;
         if n == 0 {
@@ -423,7 +536,8 @@ fn copy_file_stream(
             let _ = tx.send(JobEvent::Progress(prog.clone()));
         }
     }
-    writer.flush()
+    writer.flush()?;
+    Ok(true)
 }
 
 fn run_delete(paths: Vec<PathBuf>, tx: &Sender<JobEvent>, cancel: &AtomicBool) {

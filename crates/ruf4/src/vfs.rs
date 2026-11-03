@@ -658,6 +658,9 @@ pub enum Kind {
     File,
     Dir,
     Symlink,
+    /// A FIFO, socket or device: opening one can block indefinitely, and its
+    /// "contents" aren't a file's.
+    Other,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -673,6 +676,8 @@ fn meta_from_attrs(attrs: &sftp::Attrs) -> Meta {
         Kind::Symlink
     } else if attrs.is_dir() {
         Kind::Dir
+    } else if attrs.is_special() {
+        Kind::Other
     } else {
         Kind::File
     };
@@ -680,6 +685,18 @@ fn meta_from_attrs(attrs: &sftp::Attrs) -> Meta {
         kind,
         size: attrs.size.unwrap_or(0),
         mode: attrs.permissions.map(|p| p & 0o777),
+    }
+}
+
+fn local_kind(ft: fs::FileType) -> Kind {
+    if ft.is_symlink() {
+        Kind::Symlink
+    } else if ft.is_dir() {
+        Kind::Dir
+    } else if ft.is_file() {
+        Kind::File
+    } else {
+        Kind::Other
     }
 }
 
@@ -702,16 +719,8 @@ pub fn symlink_meta(path: &Path) -> io::Result<Meta> {
         Some(r) => with_conn(&r.host, |c| Ok(meta_from_attrs(&c.lstat(&r.path)?))),
         None => {
             let meta = fs::symlink_metadata(path)?;
-            let ft = meta.file_type();
-            let kind = if ft.is_symlink() {
-                Kind::Symlink
-            } else if ft.is_dir() {
-                Kind::Dir
-            } else {
-                Kind::File
-            };
             Ok(Meta {
-                kind,
+                kind: local_kind(meta.file_type()),
                 size: meta.len(),
                 mode: local_mode(&meta),
             })
@@ -883,14 +892,7 @@ pub fn read_dir_meta(path: &Path) -> io::Result<Vec<(String, Meta)>> {
             let mut out = Vec::new();
             for entry in fs::read_dir(path)? {
                 let entry = entry?;
-                let ft = entry.file_type()?;
-                let kind = if ft.is_symlink() {
-                    Kind::Symlink
-                } else if ft.is_dir() {
-                    Kind::Dir
-                } else {
-                    Kind::File
-                };
+                let kind = local_kind(entry.file_type()?);
                 let meta = entry.metadata().ok();
                 let size = match &meta {
                     Some(m) if kind == Kind::File => m.len(),
@@ -963,6 +965,14 @@ pub fn rename(src: &Path, dst: &Path) -> io::Result<()> {
             io::ErrorKind::Unsupported,
             "rename across filesystem domains",
         )),
+    }
+}
+
+/// Remove an empty directory.
+pub fn remove_dir(path: &Path) -> io::Result<()> {
+    match parse_remote(path) {
+        Some(r) => with_conn(&r.host, |c| c.rmdir(&r.path)),
+        None => fs::remove_dir(path),
     }
 }
 
