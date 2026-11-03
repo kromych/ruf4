@@ -638,13 +638,14 @@ impl<'a, T> Iterator for IntoIter<'a, T> {
 
     #[inline]
     fn nth(&mut self, n: usize) -> Option<Self::Item> {
-        if n >= self.len() {
-            self.ptr = self.end;
-            return None;
+        // Like `next()` called `n` times, the skipped elements are dropped.
+        let skip = n.min(self.len());
+        unsafe {
+            let skipped = ptr::slice_from_raw_parts_mut(self.ptr.as_ptr(), skip);
+            self.ptr = self.ptr.add(skip);
+            ptr::drop_in_place(skipped);
         }
-        let ptr = self.ptr;
-        self.ptr = unsafe { ptr.add(n + 1) };
-        Some(unsafe { ptr.read() })
+        self.next()
     }
 
     fn fold<B, F>(mut self, mut accum: B, mut f: F) -> B
@@ -654,7 +655,7 @@ impl<'a, T> Iterator for IntoIter<'a, T> {
         while self.ptr != self.end {
             let ptr = self.ptr;
             self.ptr = unsafe { ptr.add(1) };
-            accum = f(accum, unsafe { self.ptr.read() });
+            accum = f(accum, unsafe { ptr.read() });
         }
         accum
     }
@@ -681,3 +682,68 @@ impl<'a, T> ExactSizeIterator for IntoIter<'a, T> {
 }
 
 impl<'a, T> FusedIterator for IntoIter<'a, T> {}
+
+#[cfg(test)]
+mod tests {
+    use std::rc::Rc;
+
+    use super::*;
+
+    #[test]
+    fn test_into_iter_matches_vec() {
+        fn iter(buf: &mut [i32]) -> IntoIter<'_, i32> {
+            BVec::from_slice(buf).into_iter()
+        }
+
+        let expected: Vec<i32> = (0..10).collect();
+        let vec = || expected.clone().into_iter();
+        let mut buf = expected.clone();
+        let push = |mut acc: Vec<i32>, x| {
+            acc.push(x);
+            acc
+        };
+
+        assert_eq!(iter(&mut buf).fold(Vec::new(), push), expected);
+        assert_eq!(iter(&mut buf).sum::<i32>(), vec().sum::<i32>());
+
+        for n in 0..12 {
+            assert_eq!(iter(&mut buf).nth(n), vec().nth(n), "nth({n})");
+            assert_eq!(
+                iter(&mut buf).skip(n).fold(Vec::new(), push),
+                vec().skip(n).fold(Vec::new(), push),
+                "skip({n})"
+            );
+            assert_eq!(
+                iter(&mut buf).skip(n).sum::<i32>(),
+                vec().skip(n).sum::<i32>()
+            );
+        }
+
+        let mut it = iter(&mut buf);
+        assert_eq!(it.nth(2), Some(2));
+        assert_eq!(it.nth(3), Some(6));
+        assert_eq!(it.next(), Some(7));
+        assert_eq!(it.len(), 2);
+        assert_eq!(it.nth(5), None);
+        assert_eq!(it.len(), 0);
+        assert_eq!(it.next(), None);
+    }
+
+    #[test]
+    fn test_into_iter_nth_drops_skipped() {
+        let rc = Rc::new(());
+        let bvec = BVec::from_std_vec(vec![rc.clone(); 10]);
+        assert_eq!(Rc::strong_count(&rc), 11);
+
+        let mut it = bvec.into_iter();
+        let item = it.nth(3);
+        assert!(item.is_some());
+        // 3 skipped elements were dropped, 1 was returned and 6 remain.
+        assert_eq!(Rc::strong_count(&rc), 8);
+        drop(item);
+        assert_eq!(Rc::strong_count(&rc), 7);
+
+        assert!(it.nth(100).is_none());
+        assert_eq!(Rc::strong_count(&rc), 1);
+    }
+}
