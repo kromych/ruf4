@@ -38,7 +38,31 @@ impl Drop for TerminalGuard {
     }
 }
 
+const USAGE: &str = "\
+Usage: ruf4 [OPTIONS]
+
+A dual-panel file commander for the terminal.
+
+Options:
+  -h, --help     Print this help and exit
+  -V, --version  Print the version and exit
+";
+
 fn main() -> ExitCode {
+    // Before anything touches the terminal, so that these print normally.
+    if let Some(arg) = std::env::args_os().nth(1) {
+        match arg.to_str() {
+            Some("-h" | "--help") => print!("{USAGE}"),
+            Some("-V" | "-v" | "--version") => println!("ruf4 {}", env!("CARGO_PKG_VERSION")),
+            _ => {
+                eprintln!("ruf4: unknown argument: {}", arg.display());
+                eprintln!("Try 'ruf4 --help'.");
+                return ExitCode::from(2);
+            }
+        }
+        return ExitCode::SUCCESS;
+    }
+
     if let Err(e) = run() {
         eprintln!("ruf4: {e}");
         return ExitCode::FAILURE;

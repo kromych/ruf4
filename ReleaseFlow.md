@@ -167,9 +167,10 @@ Pushing to `main` or opening a PR runs:
 - Release builds on all platform/arch combinations (Windows binaries are Azure-signed when secrets are configured)
 
 Pushing a version tag (e.g. `git tag v0.1.0 && git push --tags`) triggers a release workflow that:
+- Checks that the tag is `v` followed by the version in `Cargo.toml`, which is what `ruf4 --version` reports
 - Builds release binaries for all platforms
 - Signs and notarizes the macOS builds (if Apple credentials are configured)
-- Packages as `.tar.gz` (Linux/macOS) or `.zip` (Windows)
+- Packages as `.tar.gz` (Linux/macOS) or `.zip` (Windows), named after the tag (e.g. `ruf4-v0.1.0-linux-x86_64.tar.gz`)
 - Creates a GitHub release with all archives
 
 Here's how re-create the tag and the release for a failed release flow:

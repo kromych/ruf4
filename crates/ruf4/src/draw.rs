@@ -1402,6 +1402,7 @@ fn draw_help_dialog(
         bg: theme.dialog_info_bg,
         ..DIALOG_BLUE_50
     };
+    const VERSION: &str = env!("CARGO_PKG_VERSION");
     let caption = if total > max_visible {
         // The page holding the last visible row: 1 at the top, the last page
         // when scrolled to the end.
@@ -1409,10 +1410,10 @@ fn draw_help_dialog(
         let pages = help_text.len().div_ceil(max_visible as usize);
         arena_format!(
             ctx.arena(),
-            "Help ({page}/{pages}) - Up/Down=Scroll  Click=Run  Esc=Close"
+            "ruf4 {VERSION} Help ({page}/{pages}) - Up/Down=Scroll  Click=Run  Esc=Close"
         )
     } else {
-        arena_format!(ctx.arena(), "Help - Click=Run  Esc=Close")
+        arena_format!(ctx.arena(), "ruf4 {VERSION} Help - Click=Run  Esc=Close")
     };
     let w = dialog_begin(ctx, theme, &spec, &caption, h, size);
     {

@@ -187,6 +187,8 @@ fn test_help_lists_command_line_keys_and_counts_pages() {
 ",
     );
     assert!(text.contains("Help (1/"), "{text}");
+    let title = concat!("ruf4 ", env!("CARGO_PKG_VERSION"), " Help");
+    assert!(text.contains(title), "{text}");
     // Scroll to the bottom: the command line keys, on the last page.
     for _ in 0..60 {
         text = screen.rows(&mut s, Some(Input::Keyboard(vk::DOWN))).join(
