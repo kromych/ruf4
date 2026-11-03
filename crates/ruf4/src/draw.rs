@@ -88,8 +88,12 @@ fn draw_menubar(ctx: &mut Context, state: &mut State) -> bool {
         let contains_focus = ctx.contains_focus();
         menu_active = contains_focus;
 
+        // Top-level menus get no Alt+letter accelerators: Alt+letter is quick
+        // search, and F9 opens the menu bar, at its first menu.
+        let focus_menu = !contains_focus && (ctx.consume_shortcut(vk::F9) || state.want_menu_focus);
+
         // "Files" menu
-        if ctx.menubar_menu_begin("Files", 'F') {
+        if ctx.menubar_menu_begin("Files", '\0') {
             if ctx.menubar_menu_button("Copy", 'C', key(Action::Copy)) {
                 state.execute_action(Action::Copy);
             }
@@ -105,7 +109,7 @@ fn draw_menubar(ctx: &mut Context, state: &mut State) -> bool {
             if ctx.menubar_menu_button("Change root", 'H', key(Action::ChangeRoot)) {
                 state.execute_action(Action::ChangeRoot);
             }
-            if ctx.menubar_menu_button("Directory history", 'D', key(Action::DirHistory)) {
+            if ctx.menubar_menu_button("Directory history", 'I', key(Action::DirHistory)) {
                 state.execute_action(Action::DirHistory);
             }
             if ctx.menubar_menu_button("Command history", 'O', key(Action::CmdHistory)) {
@@ -119,9 +123,13 @@ fn draw_menubar(ctx: &mut Context, state: &mut State) -> bool {
             }
             ctx.menubar_menu_end();
         }
+        if focus_menu {
+            // Focuses the node just added: the (closed) Files menu.
+            ctx.steal_focus();
+        }
 
         // "Commands" menu
-        if ctx.menubar_menu_begin("Commands", 'C') {
+        if ctx.menubar_menu_begin("Commands", '\0') {
             let hidden = state.active_panel().show_hidden;
             if ctx.menubar_menu_checkbox(
                 "Show hidden files",
@@ -208,10 +216,6 @@ fn draw_menubar(ctx: &mut Context, state: &mut State) -> bool {
             {
                 state.execute_action(binding.action);
             }
-        }
-
-        if !contains_focus && (ctx.consume_shortcut(vk::F9) || state.want_menu_focus) {
-            ctx.steal_focus();
         }
     }
     ctx.menubar_end();

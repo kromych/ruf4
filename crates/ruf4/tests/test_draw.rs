@@ -143,3 +143,36 @@ fn test_click_in_scrolled_list_dialog_picks_the_entry_under_the_mouse() {
         assert_eq!(labels[*cursor], target);
     }
 }
+
+#[test]
+fn test_alt_letter_is_quick_search_not_a_menu() {
+    let entries = ["..", "alpha", "charlie", "foxtrot"]
+        .iter()
+        .map(|&n| make_entry(n, n == "..", 0))
+        .collect();
+    let mut s = State::for_testing(
+        Panel::with_entries(PathBuf::from("/test"), entries),
+        Panel::with_entries(PathBuf::from("/test"), vec![make_entry("..", true, 0)]),
+    );
+    let mut screen = Screen::new(80, 24);
+    screen.frame(&mut s, None);
+
+    // Alt+F and Alt+C used to also open the Files and Commands menus.
+    for (key, name) in [(vk::F, "foxtrot"), (vk::C, "charlie")] {
+        screen.frame(&mut s, Some(Input::Keyboard(kbmod::ALT | key)));
+        assert_eq!(s.left.entries[s.left.cursor].name, name);
+        assert!(!s.menu_active, "Alt+{name} opened a menu");
+        // A different key ends the quick search before the next one.
+        screen.frame(&mut s, Some(Input::Keyboard(vk::HOME)));
+    }
+
+    // The menus are still a key away, starting with the first one.
+    let rows = screen.rows(&mut s, Some(Input::Keyboard(vk::F9)));
+    assert!(s.menu_active);
+    let screen_text = rows.join(
+        "
+",
+    );
+    assert!(screen_text.contains("Make directory"), "{screen_text}");
+    assert!(!screen_text.contains("Show hidden files"), "{screen_text}");
+}
