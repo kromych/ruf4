@@ -34,12 +34,17 @@ fn test_bindings_survive_save_and_load() {
 
     let panel = || Panel::with_entries(PathBuf::from("/test"), vec![make_entry("..", true, 0)]);
     let mut state = State::for_testing(panel(), panel());
-    // Delete loses its second key (the default is F8 and Del), Quit loses all.
+    // Delete loses its Del key (keeping F8, plus Ctrl+X on macOS), Quit loses all.
     state
         .bindings
         .retain(|b| !(b.action == Action::Delete && b.key == vk::DELETE));
     state.bindings.retain(|b| b.action != Action::Quit);
-    assert_eq!(keys_of(&state.bindings, Action::Delete), ["F8"]);
+    let delete_keys: Vec<String> = keys_of(&action::default_bindings(), Action::Delete)
+        .into_iter()
+        .filter(|k| k != "Delete")
+        .collect();
+    assert!(delete_keys.iter().any(|k| k == "F8"));
+    assert_eq!(keys_of(&state.bindings, Action::Delete), delete_keys);
 
     settings::settings_from_state(&state).save().unwrap();
     // Saved twice, as happens on every quit: what was loaded must save the same.
@@ -48,7 +53,7 @@ fn test_bindings_survive_save_and_load() {
     let loaded = Settings::load().expect("settings load");
     let _ = std::fs::remove_dir_all(&dir);
 
-    assert_eq!(keys_of(&loaded.bindings, Action::Delete), ["F8"]);
+    assert_eq!(keys_of(&loaded.bindings, Action::Delete), delete_keys);
     assert!(keys_of(&loaded.bindings, Action::Quit).is_empty());
     assert_eq!(
         keys_of(&loaded.bindings, Action::Move),
