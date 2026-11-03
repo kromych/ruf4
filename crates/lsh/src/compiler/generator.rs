@@ -10,24 +10,23 @@
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
+use std::fmt::Write as _;
 use std::fs::read_dir;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use stdext::arena::scratch_arena;
-
-use super::*;
+use super::backend::Assembly;
+use super::{CompileError, CompileResult, Compiler};
 use crate::runtime::{Instruction, MnemonicFormattingConfig};
 
-pub struct Generator<'a> {
-    compiler: Compiler<'a>,
+#[derive(Default)]
+pub struct Generator {
+    compiler: Compiler,
 }
 
-impl<'a> Generator<'a> {
-    pub fn new(arena: &'a Arena) -> Self {
-        Self {
-            compiler: Compiler::new(arena),
-        }
+impl Generator {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn read_file(&mut self, path: &Path) -> CompileResult<()> {
@@ -75,7 +74,7 @@ impl<'a> Generator<'a> {
         Ok(paths)
     }
 
-    pub fn assemble(mut self) -> CompileResult<Assembly<'a>> {
+    pub fn assemble(mut self) -> CompileResult<Assembly> {
         self.compiler.assemble()
     }
 
@@ -126,8 +125,7 @@ impl<'a> Generator<'a> {
                 break;
             };
 
-            let scratch = scratch_arena(None);
-            let mnemonic = instr.mnemonic(&scratch, &mnemonic_config);
+            let mnemonic = instr.mnemonic(&mnemonic_config);
             _ = write!(output, "{line_prefix}{off:>line_num_width$}:  {mnemonic}");
 
             let text_chars = {
@@ -215,11 +213,7 @@ impl TryFrom<u32> for HighlightKind {{
             );
         }
 
-        output.push_str("/*\n");
-        output.push_str(&self.compiler.as_mermaid());
-        output.push_str("*/\n");
-
-        output.push_str("\n#[rustfmt::skip] pub const LANGUAGES: &[Language] = &[\n");
+        output.push_str("\n#[rustfmt::skip] pub static LANGUAGES: &[Language] = &[\n");
         for ep in &assembly.entrypoints {
             _ = writeln!(
                 output,
@@ -232,7 +226,7 @@ impl TryFrom<u32> for HighlightKind {{
         output.push_str("];\n");
 
         output.push_str(
-            "\n#[rustfmt::skip] pub const FILE_ASSOCIATIONS: &[(&str, &Language)] = &[\n",
+            "\n#[rustfmt::skip] pub static FILE_ASSOCIATIONS: &[(&str, &Language)] = &[\n",
         );
         for (idx, ep) in assembly.entrypoints.iter().enumerate() {
             for path in &ep.paths {
@@ -243,7 +237,7 @@ impl TryFrom<u32> for HighlightKind {{
 
         _ = writeln!(
             output,
-            "\n#[rustfmt::skip] pub const ASSEMBLY: [u8; {len}] = [",
+            "\n#[rustfmt::skip] pub static ASSEMBLY: [u8; {len}] = [",
             len = assembly.instructions.len() + Instruction::MAX_ENCODED_SIZE,
         );
         let line_num_width = assembly.instructions.len().checked_ilog10().unwrap_or(0) as usize + 1;
@@ -267,7 +261,6 @@ impl TryFrom<u32> for HighlightKind {{
             output.push_str("    ");
 
             let (instr, len) = Instruction::decode(&assembly.instructions[off..]);
-            let scratch = scratch_arena(None);
             for i in 0..len {
                 _ = write!(output, "0x{:02x}, ", assembly.instructions[off + i]);
             }
@@ -278,7 +271,7 @@ impl TryFrom<u32> for HighlightKind {{
                     "{:<padding_width$}// {off:>line_num_width$}:  {mnemonic}",
                     "",
                     padding_width = Instruction::MAX_ENCODED_SIZE.saturating_sub(len) * 6,
-                    mnemonic = instr.mnemonic(&scratch, &Default::default())
+                    mnemonic = instr.mnemonic(&Default::default())
                 );
             } else {
                 output.push('\n');
@@ -300,7 +293,7 @@ impl TryFrom<u32> for HighlightKind {{
 
         _ = writeln!(
             output,
-            "\n#[rustfmt::skip] pub const CHARSETS: [[u16; 16]; {len}] = [",
+            "\n#[rustfmt::skip] pub static CHARSETS: [[u16; 16]; {len}] = [",
             len = assembly.charsets.len(),
         );
         for cs in assembly.charsets {
@@ -318,7 +311,7 @@ impl TryFrom<u32> for HighlightKind {{
 
         _ = writeln!(
             output,
-            "\n#[rustfmt::skip] pub const STRINGS: [&str; {len}] = [",
+            "\n#[rustfmt::skip] pub static STRINGS: [&str; {len}] = [",
             len = assembly.strings.len(),
         );
         for s in assembly.strings {

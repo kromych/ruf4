@@ -6,56 +6,50 @@ use std::thread;
 use std::time::Duration;
 
 use lsh::compiler::{Assembly, Compiler, Generator, builtin_definitions_path};
-use lsh::runtime::{Instruction, Runtime};
-use stdext::arena::{Arena, scratch_arena};
+use lsh::runtime::{Highlight, Instruction, Runtime};
 
 /// Highlight spans of a single line as `(start, kind)`, `kind` being the DSL identifier.
 type Spans = Vec<(usize, String)>;
 
 /// Compiles `src` and highlights `lines` with its `test` function.
 fn highlight(src: &str, lines: &[&str]) -> Vec<Spans> {
-    let scratch = scratch_arena(None);
-    let mut compiler = Compiler::new(&scratch);
+    let mut compiler = Compiler::new();
     compiler.parse("test.lsh", src).unwrap();
     let assembly = compiler.assemble().unwrap();
-    run(&scratch, &assembly, "test", lines)
+    run(&assembly, "test", lines)
 }
 
 /// Highlights `lines` with the built-in definition `language`.
 fn highlight_builtin(language: &str, lines: &[&str]) -> Vec<Spans> {
-    let scratch = scratch_arena(None);
-    let mut generator = Generator::new(&scratch);
+    let mut generator = Generator::new();
     generator
         .read_directory(builtin_definitions_path())
         .unwrap();
     let assembly = generator.assemble().unwrap();
-    run(&scratch, &assembly, language, lines)
+    run(&assembly, language, lines)
 }
 
-fn run(arena: &Arena, assembly: &Assembly, entrypoint: &str, lines: &[&str]) -> Vec<Spans> {
+fn run(assembly: &Assembly, entrypoint: &str, lines: &[&str]) -> Vec<Spans> {
     // Like the generator, pad the instruction stream with invalid opcodes,
     // so that the runtime can safely decode past the end.
     let mut instructions = assembly.instructions.clone();
     instructions.extend([0xff; Instruction::MAX_ENCODED_SIZE]);
     let charsets: Vec<_> = assembly.charsets.iter().map(|cs| cs.serialize()).collect();
+    let strings: Vec<&str> = assembly.strings.iter().map(String::as_str).collect();
     let entrypoint = assembly
         .entrypoints
         .iter()
         .find(|ep| ep.name == entrypoint)
         .unwrap()
         .address;
-    let mut runtime = Runtime::new(
-        &instructions,
-        &assembly.strings,
-        &charsets,
-        entrypoint as u32,
-    );
+    let mut runtime = Runtime::new(&instructions, &strings, &charsets, entrypoint as u32);
 
     lines
         .iter()
         .map(|line| {
-            runtime
-                .parse_next_line::<u32>(arena, line.as_bytes())
+            let mut highlights: Vec<Highlight<u32>> = Vec::new();
+            runtime.parse_next_line(line.as_bytes(), &mut highlights);
+            highlights
                 .iter()
                 .map(|hl| {
                     let kind = assembly

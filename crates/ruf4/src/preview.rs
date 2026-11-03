@@ -113,9 +113,8 @@ fn text_preview(text: &str, file_size: u64, name: &str, path: &Path) -> Preview 
     // (e.g. the `<<-EOF` heredoc terminator in shell scripts).
     let mut highlights: Vec<Vec<HighlightSpan>> = match lsh::detect_language(path) {
         Some(language) => {
-            let arena = stdext::arena::scratch_arena(None);
             let line_bytes: Vec<&[u8]> = raw.iter().map(|l| l.as_bytes()).collect();
-            let hl = lsh::highlight_lines(&arena, language, &line_bytes);
+            let hl = lsh::highlight_lines(language, &line_bytes);
             hl.iter()
                 .map(|spans| {
                     spans

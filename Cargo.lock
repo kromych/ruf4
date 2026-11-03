@@ -105,9 +105,6 @@ dependencies = [
 [[package]]
 name = "ruf4-lsh"
 version = "0.1.0"
-dependencies = [
- "ruf4-stdext",
-]
 
 [[package]]
 name = "ruf4-stdext"

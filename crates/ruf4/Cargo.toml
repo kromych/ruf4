@@ -14,14 +14,13 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-lsh.workspace = true
+lsh = { workspace = true, features = ["glob"] }
 ruf4-tui.workspace = true
 stdext.workspace = true
 
 [build-dependencies]
 embed-resource = "3"
-lsh.workspace = true
-stdext.workspace = true
+lsh = { workspace = true, features = ["compiler"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

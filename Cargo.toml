@@ -23,7 +23,7 @@ strip = "symbols"
 incremental = true
 
 [workspace.dependencies]
-lsh = { package = "ruf4-lsh", path = "./crates/lsh", version = "0.1.0" }
+lsh = { package = "ruf4-lsh", path = "./crates/lsh", version = "0.1.0", default-features = false }
 ruf4-tui = { path = "./crates/tui", version = "0.1.0" }
 stdext = { package = "ruf4-stdext", path = "./crates/stdext", version = "0.1.0" }
 libc = "0.2"

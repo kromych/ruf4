@@ -8,11 +8,15 @@ guarantees outside of that use.
 The library is named `lsh` and contains:
 
 - the compiler for the `.lsh` highlighting definition language (frontend,
-  optimizer, regex/charset engine, backend),
-- a Rust code generator meant to be run from a build script,
+  optimizer, regex/charset engine, backend) and a Rust code generator meant
+  to be run from a build script (feature `compiler`),
+- glob matching of file names to pick a language (feature `glob`),
 - the runtime that applies the generated definitions to text,
-- the built-in `definitions/` for diff, git, JSON, JavaScript, Markdown,
-  PowerShell, TOML-like properties, and more.
+- the built-in `definitions/` for C, C++, C#, diff, F#, git, Go, Java,
+  JavaScript, JSON, Lua, Markdown, Odin, PowerShell, properties, Python, Ruby,
+  Rust, shell scripts, SQL, TOML, XML, YAML, Zig and more.
+
+Both features are on by default. The crate has no dependencies.
 
 ## License
 

@@ -16,5 +16,9 @@ rust-version.workspace = true
 [lib]
 name = "lsh"
 
-[dependencies]
-stdext.workspace = true
+[features]
+default = ["compiler", "glob"]
+# The compiler and code generator, for build scripts.
+compiler = []
+# Glob matching of file names, for picking a language.
+glob = []

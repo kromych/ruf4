@@ -1,10 +1,6 @@
 use std::fmt;
 use std::ops::RangeInclusive;
 
-use stdext::arena::Arena;
-
-use super::Intern;
-
 const WORD_BITS: usize = usize::BITS as usize;
 
 pub type SerializedCharset = [u16; 16];
@@ -115,6 +111,17 @@ impl Charset {
         }
     }
 
+    /// Adds the opposite case of every ASCII letter in the set.
+    pub fn fold_case(&mut self) {
+        for lower in b'a'..=b'z' {
+            let upper = lower.to_ascii_uppercase();
+            if self.get(lower) || self.get(upper) {
+                self.set(lower, true);
+                self.set(upper, true);
+            }
+        }
+    }
+
     pub fn is_superset_of(&self, other: &Charset) -> bool {
         for (&s, &o) in self.bits.iter().zip(other.bits.iter()) {
             // For self to be a superset, every bit in other must be in self
@@ -196,18 +203,6 @@ impl fmt::Debug for Charset {
         }
 
         write!(f, "]")
-    }
-}
-
-impl<'a> Intern<'a, Charset> for Vec<&'a Charset> {
-    fn intern(&mut self, arena: &'a Arena, value: &Charset) -> &'a Charset {
-        if let Some(&s) = self.iter().find(|&&v| v == value) {
-            s
-        } else {
-            let s = arena.alloc_uninit().write(value.clone());
-            self.push(s);
-            s
-        }
     }
 }
 
