@@ -428,7 +428,10 @@ fn is_windows_admin() -> bool {
 pub fn settings_path() -> Option<PathBuf> {
     #[cfg(unix)]
     {
-        if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+        // Per the XDG spec, an empty or relative value is to be ignored.
+        if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME")
+            && Path::new(&xdg).is_absolute()
+        {
             return Some(PathBuf::from(xdg).join("ruf4").join("settings.ini"));
         }
         if let Ok(home) = std::env::var("HOME") {
