@@ -684,19 +684,24 @@ fn draw_preview_panel(
         ctx.attr_foreground_rgba(ctx.indexed(theme.preview_text));
 
         let max_w = (width - 2 - sb_cols).max(0) as usize;
-        let display = if line.len() > max_w {
-            &line[..line.floor_char_boundary(max_w)]
+        let display = truncate_to_display_width(line, max_w);
+
+        // Pad out to the scrollbar column.
+        let sb_suffix = sb_char(thumb, row);
+        let tail_buf;
+        let tail = if sb_suffix.is_empty() {
+            ""
         } else {
-            line
+            let pad = max_w - str_display_width(display);
+            tail_buf = arena_format!(ctx.arena(), "{:pad$} {sb_suffix}", "");
+            &tail_buf
         };
 
-        let sb_suffix = sb_char(thumb, row);
         let hl = highlights.get(i);
         if hl.is_some_and(|h| !h.is_empty()) {
-            draw_highlighted_line(ctx, theme, display, hl.unwrap(), sb_suffix);
-        } else if !sb_suffix.is_empty() {
-            let pad = max_w - str_display_width(display);
-            let text = arena_format!(ctx.arena(), "{display}{:pad$} {sb_suffix}", "");
+            draw_highlighted_line(ctx, theme, display, hl.unwrap(), tail);
+        } else if !tail.is_empty() {
+            let text = arena_format!(ctx.arena(), "{display}{tail}");
             ctx.label("preview-text", &text);
         } else {
             ctx.label("preview-text", display);
@@ -730,50 +735,41 @@ fn draw_highlighted_line(
     theme: &Theme,
     line: &str,
     spans: &[HighlightSpan],
-    sb_suffix: &str,
+    tail: &str,
 ) {
     ctx.styled_label_begin("preview-text");
 
     let default_fg = ctx.indexed(theme.preview_text);
     let mut pos = 0;
 
+    // lsh matches bytes, so a span may start inside a multi-byte character;
+    // such a character goes to the span that starts within it.
     for (idx, span) in spans.iter().enumerate() {
-        let start = span.start.min(line.len());
+        let start = line.floor_char_boundary(span.start).max(pos);
         let end = spans
             .get(idx + 1)
-            .map(|s| s.start.min(line.len()))
-            .unwrap_or(line.len());
+            .map_or(line.len(), |s| line.floor_char_boundary(s.start))
+            .max(start);
 
         // Emit any unhighlighted gap before this span.
         if pos < start {
-            let gap = &line[line.ceil_char_boundary(pos)..line.floor_char_boundary(start)];
-            if !gap.is_empty() {
-                ctx.styled_label_set_foreground(default_fg);
-                ctx.styled_label_add_text(gap);
-            }
+            ctx.styled_label_set_foreground(default_fg);
+            ctx.styled_label_add_text(&line[pos..start]);
         }
 
         if start < end {
-            let text = &line[line.ceil_char_boundary(start)..line.floor_char_boundary(end)];
-            if !text.is_empty() {
-                ctx.styled_label_set_foreground(ctx.indexed(theme.highlight_color(span.kind)));
-                ctx.styled_label_add_text(text);
-            }
+            ctx.styled_label_set_foreground(ctx.indexed(theme.highlight_color(span.kind)));
+            ctx.styled_label_add_text(&line[start..end]);
         }
 
         pos = end;
     }
 
-    // Emit any trailing unhighlighted text.
-    if pos < line.len() {
+    // Emit any trailing unhighlighted text, then the scrollbar.
+    if pos < line.len() || !tail.is_empty() {
         ctx.styled_label_set_foreground(default_fg);
-        ctx.styled_label_add_text(&line[line.ceil_char_boundary(pos)..]);
-    }
-
-    if !sb_suffix.is_empty() {
-        ctx.styled_label_set_foreground(default_fg);
-        ctx.styled_label_add_text(" ");
-        ctx.styled_label_add_text(sb_suffix);
+        ctx.styled_label_add_text(&line[pos..]);
+        ctx.styled_label_add_text(tail);
     }
 
     ctx.styled_label_end();
