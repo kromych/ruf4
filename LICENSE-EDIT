@@ -3,6 +3,7 @@ Microsoft Edit (https://github.com/microsoft/edit), which is licensed
 under the MIT License:
 
   - crates/stdext/    (arena allocators, collections, SIMD utilities)
+  - crates/lsh/       (syntax highlighting compiler, runtime, definitions)
   - crates/tui/src/   (VT parser, framebuffer, input handling, TUI framework,
                         color system, platform abstraction, unicode handling)
 

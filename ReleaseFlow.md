@@ -4,7 +4,7 @@
 
 ### Prerequisites
 
-- [Rust](https://rustup.rs/) 1.93 or later
+- [Rust](https://rustup.rs/) 1.96 or later (the workspace `rust-version`)
 
 ### Native build
 
@@ -97,6 +97,46 @@ GitHub repository secrets.
 | `AZURE_CERT_PROFILE` | Certificate profile name |
 
 Signing is skipped when secrets are not configured (PRs, forks without credentials).
+
+## Publishing to crates.io
+
+All four workspace crates are published. The `stdext` and `lsh` names were
+already taken on crates.io, so the packages are named `ruf4-stdext` and
+`ruf4-lsh` while their libraries keep the short names (`[lib] name`), which is
+why the source still says `use stdext::...` and `use lsh::...`.
+
+| Package | Library | Contents |
+|---------|---------|----------|
+| `ruf4` | `ruf4` + `ruf4` binary | the file commander |
+| `ruf4-tui` | `ruf4_tui` | TUI framework |
+| `ruf4-lsh` | `lsh` | syntax highlighting compiler/runtime + `definitions/` |
+| `ruf4-stdext` | `stdext` | arenas, collections, SIMD, Unicode |
+
+The version lives once in `[workspace.package]` and every crate inherits it;
+bump it there (and in `resources/windows/ruf4.rc`) before releasing.
+
+Dry run the whole workspace first — this packages each crate and builds it from
+its own tarball, with the sibling tarballs standing in for the registry:
+
+```sh
+cargo package --workspace
+```
+
+Then publish bottom-up, since each crate must already be on crates.io before
+its dependents can be verified:
+
+```sh
+cargo publish -p ruf4-stdext
+cargo publish -p ruf4-lsh
+cargo publish -p ruf4-tui
+cargo publish -p ruf4
+```
+
+Note that `ruf4`'s build script embeds the Windows icon and version resource
+from `resources/windows/ruf4.rc`, which lives outside the package directory and
+is therefore not part of the published tarball. Binaries built by `cargo install
+ruf4` on Windows have no icon or version info; the GitHub release builds, which
+build from a checkout, do.
 
 ## Supported platforms
 

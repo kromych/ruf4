@@ -1,10 +1,16 @@
 [package]
 name = "ruf4"
-version = "0.1.0"
-description = "A dual-panel file commander"
+description = "A dual-panel file commander for the terminal, inspired by FAR Manager"
+keywords = ["file-manager", "commander", "tui", "terminal", "sftp"]
+categories = ["command-line-utilities", "filesystem"]
+readme = "../../ReadMe.md"
 
+version.workspace = true
+authors.workspace = true
 edition.workspace = true
+homepage.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]

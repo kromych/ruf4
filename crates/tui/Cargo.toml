@@ -1,10 +1,16 @@
 [package]
 name = "ruf4-tui"
-version = "0.1.0"
-description = "TUI framework for ruf4, derived from Microsoft Edit"
+description = "Immediate mode TUI framework for ruf4, derived from Microsoft Edit"
+keywords = ["tui", "terminal", "console", "immediate-mode", "vt"]
+categories = ["command-line-interface"]
+readme = "ReadMe.md"
 
+version.workspace = true
+authors.workspace = true
 edition.workspace = true
+homepage.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]

@@ -1,11 +1,20 @@
 [package]
-name = "lsh"
-version = "0.0.0"
+name = "ruf4-lsh"
+description = "Syntax highlighting definition language for ruf4: compiler, code generator and runtime"
+keywords = ["syntax", "highlighting", "lexer", "regex", "tui"]
+categories = ["parser-implementations", "text-processing"]
+readme = "ReadMe.md"
 
+version.workspace = true
+authors.workspace = true
 edition.workspace = true
+homepage.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+
+[lib]
+name = "lsh"
 
 [dependencies]
 stdext.workspace = true

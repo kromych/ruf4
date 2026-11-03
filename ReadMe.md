@@ -22,7 +22,12 @@ This is built in Rust on the TUI framework derived from
 very small and just enough.
 
 Runs on Linux, macOS, and Windows. You can download the latest pre-release
-[0.0.8](https://github.com/kromych/ruf4/releases/tag/v0.0.8).
+[0.0.8](https://github.com/kromych/ruf4/releases/tag/v0.0.8), or build it from
+crates.io:
+
+```sh
+cargo install ruf4
+```
 
 If you are a developer, [here](./ReleaseFlow.md) are the gory details and notes on builds/releases.
 ## Screenshots
