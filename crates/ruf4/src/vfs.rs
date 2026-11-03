@@ -92,6 +92,14 @@ impl HostSpec {
             "ClearAllForwardings=yes".into(),
             "-o".into(),
             "ForwardX11=no".into(),
+            // Panel I/O blocks the UI, so a dead link (sleep, VPN drop) must
+            // fail within a minute instead of waiting on TCP for hours.
+            "-o".into(),
+            "ConnectTimeout=20".into(),
+            "-o".into(),
+            "ServerAliveInterval=15".into(),
+            "-o".into(),
+            "ServerAliveCountMax=4".into(),
         ]);
         if let Some(port) = self.port {
             args.push("-p".into());
