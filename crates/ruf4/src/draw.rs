@@ -1377,7 +1377,7 @@ fn draw_info_dialog(ctx: &mut Context, theme: &Theme, message: &str, size: Size)
 fn draw_help_dialog(
     ctx: &mut Context,
     theme: &Theme,
-    help_text: &[(String, &str, Action)],
+    help_text: &[(String, &str, Option<Action>)],
     scroll: usize,
     size: Size,
 ) {

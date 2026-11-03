@@ -176,3 +176,31 @@ fn test_alt_letter_is_quick_search_not_a_menu() {
     assert!(screen_text.contains("Make directory"), "{screen_text}");
     assert!(!screen_text.contains("Show hidden files"), "{screen_text}");
 }
+
+#[test]
+fn test_help_lists_command_line_keys_and_counts_pages() {
+    let mut s = test_state();
+    s.execute_action(Action::Help);
+    let mut screen = Screen::new(80, 24);
+    let mut text = screen.rows(&mut s, None).join(
+        "
+",
+    );
+    assert!(text.contains("Help (1/"), "{text}");
+    // Scroll to the bottom: the command line keys, on the last page.
+    for _ in 0..60 {
+        text = screen.rows(&mut s, Some(Input::Keyboard(vk::DOWN))).join(
+            "
+",
+        );
+    }
+    assert!(text.contains("Ctrl+Right"), "{text}");
+    let pages = s.help_text.len().div_ceil(24 - 8);
+    assert!(text.contains(&format!("Help ({pages}/{pages})")), "{text}");
+
+    // Clicking a row that only describes keys runs nothing.
+    let y = text.lines().position(|l| l.contains("Ctrl+Right")).unwrap();
+    screen.frame(&mut s, Some(click(40, y as CoordType)));
+    assert!(matches!(s.dialog, Dialog::None));
+    assert!(!s.command_line_active && !s.menu_active);
+}

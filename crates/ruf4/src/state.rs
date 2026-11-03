@@ -142,7 +142,7 @@ pub struct State {
     pub dir_history: Vec<PathBuf>,
     pub cmd_history: Vec<String>,
     pub bindings: Vec<Binding>,
-    pub help_text: Vec<(String, &'static str, Action)>,
+    pub help_text: Vec<(String, &'static str, Option<Action>)>,
     pub theme: Theme,
     last_click: Option<(Instant, Point)>,
     /// The active background operation, if any.
@@ -1508,11 +1508,9 @@ impl State {
     }
 
     fn invoke_help_action(&mut self, idx: usize) {
-        if let Some((key_str, _, action)) = self.help_text.get(idx) {
-            if key_str.is_empty() {
-                return; // separator row
-            }
-            self.execute_action(*action);
+        // Separators and rows that only describe keys have no action.
+        if let Some(&(_, _, Some(action))) = self.help_text.get(idx) {
+            self.execute_action(action);
         }
     }
 }
