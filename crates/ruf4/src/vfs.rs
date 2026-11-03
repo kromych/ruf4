@@ -728,6 +728,21 @@ pub fn symlink_meta(path: &Path) -> io::Result<Meta> {
     }
 }
 
+/// stat-style metadata (symlinks are followed).
+pub fn stat_meta(path: &Path) -> io::Result<Meta> {
+    match parse_remote(path) {
+        Some(r) => with_conn(&r.host, |c| Ok(meta_from_attrs(&c.stat(&r.path)?))),
+        None => {
+            let meta = fs::metadata(path)?;
+            Ok(Meta {
+                kind: local_kind(meta.file_type()),
+                size: meta.len(),
+                mode: local_mode(&meta),
+            })
+        }
+    }
+}
+
 /// Whether `path` exists, following symlinks.
 pub fn exists(path: &Path) -> bool {
     match parse_remote(path) {

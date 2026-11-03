@@ -51,6 +51,17 @@ pub fn generate(path: &Path) -> Preview {
         return dir_preview(path, &name);
     }
 
+    // Opening a FIFO would block the UI until something writes to it.
+    if vfs::stat_meta(path).is_ok_and(|m| m.kind == vfs::Kind::Other) {
+        return Preview {
+            lines: vec!["Not a regular file (pipe, socket or device)".to_string()],
+            highlights: Vec::new(),
+            is_binary: false,
+            file_size: 0,
+            title: name,
+        };
+    }
+
     // TODO: remote previews block the UI thread for the duration of the read.
     let (buf, file_size) = match vfs::read_prefix(path, MAX_PREVIEW_BYTES) {
         Ok(v) => v,
