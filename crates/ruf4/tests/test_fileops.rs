@@ -286,3 +286,50 @@ fn test_overwrite_existing_file() {
 
     cleanup(&root);
 }
+
+fn state_in(dir: &Path) -> ruf4::state::State {
+    let other = ruf4::panel::Panel::new(dir.to_path_buf());
+    ruf4::state::State::for_testing(ruf4::panel::Panel::new(dir.to_path_buf()), other)
+}
+
+#[test]
+fn test_rename_refuses_to_replace_existing() {
+    let root = temp_dir();
+    fs::write(root.join("a.txt"), "a").unwrap();
+    fs::write(root.join("b.txt"), "b").unwrap();
+    let mut s = state_in(&root);
+    s.left.cursor = s
+        .left
+        .entries
+        .iter()
+        .position(|e| e.name == "a.txt")
+        .unwrap();
+
+    ruf4::fileops::do_rename(&mut s, "b.txt");
+    assert!(matches!(s.dialog, ruf4::state::Dialog::Error { .. }));
+    assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "a");
+    assert_eq!(fs::read_to_string(root.join("b.txt")).unwrap(), "b");
+    cleanup(&root);
+}
+
+#[test]
+fn test_rename_case_only_change() {
+    let root = temp_dir();
+    fs::write(root.join("a.txt"), "a").unwrap();
+    let mut s = state_in(&root);
+    s.left.cursor = s
+        .left
+        .entries
+        .iter()
+        .position(|e| e.name == "a.txt")
+        .unwrap();
+
+    ruf4::fileops::do_rename(&mut s, "A.txt");
+    assert!(matches!(s.dialog, ruf4::state::Dialog::None));
+    let names: Vec<_> = fs::read_dir(&root)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert_eq!(names, ["A.txt"]);
+    cleanup(&root);
+}

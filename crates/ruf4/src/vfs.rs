@@ -698,6 +698,17 @@ pub fn is_dir(path: &Path) -> bool {
 /// Whether the two paths refer to the same file.
 pub fn same_file(a: &Path, b: &Path) -> bool {
     match (parse_remote(a), parse_remote(b)) {
+        // Same inode catches hard links, and case variants of a name on a
+        // case-insensitive filesystem, which canonicalize() may not unify.
+        #[cfg(unix)]
+        (None, None) => {
+            use std::os::unix::fs::MetadataExt;
+            match (fs::metadata(a), fs::metadata(b)) {
+                (Ok(ma), Ok(mb)) => (ma.dev(), ma.ino()) == (mb.dev(), mb.ino()),
+                _ => false,
+            }
+        }
+        #[cfg(not(unix))]
         (None, None) => match (fs::canonicalize(a), fs::canonicalize(b)) {
             (Ok(ca), Ok(cb)) => ca == cb,
             _ => false,
