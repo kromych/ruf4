@@ -265,13 +265,6 @@ pub enum Input<'input> {
     Mouse(InputMouse),
 }
 
-/// The largest width/height we accept from a `CSI 8;h;w t` window size report.
-///
-/// That report can be spoofed by typing or pasting it, and the framebuffer allocates
-/// memory proportional to the size: 32767x32767 needs tens of GB and aborts, whereas
-/// 4096x4096 stays at a few hundred MB, while still being far beyond any real terminal.
-const MAX_WINDOW_SIZE: CoordType = 4096;
-
 /// Parses VT sequences into input events.
 pub struct Parser {
     bracketed_paste: bool,
@@ -343,7 +336,11 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
                     return Some(Input::Text(text));
                 }
                 vt::Token::Ctrl(ch) => match ch {
-                    '\0' => return Some(Input::Keyboard(kbmod::CTRL | vk::SPACE)),
+                    '\0' => {
+                        // Both Ctrl+Space and Ctrl+Shift+2 produce \0, and
+                        // Ctrl+Space is probably the more common of the two.
+                        return Some(Input::Keyboard(kbmod::CTRL | vk::SPACE));
+                    }
                     '\t' | '\r' => return Some(Input::Keyboard(InputKey::new(ch as u32))),
                     '\n' => return Some(Input::Keyboard(kbmod::CTRL | vk::RETURN)),
                     ..='\x1a' => {
@@ -454,12 +451,6 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
                         }
                         'M' if csi.param_count == 0 => {
                             self.parser.x10_mouse_want = true;
-                        }
-                        't' if csi.params[0] == 8 => {
-                            // Window Size
-                            let width = (csi.params[2] as CoordType).clamp(1, MAX_WINDOW_SIZE);
-                            let height = (csi.params[1] as CoordType).clamp(1, MAX_WINDOW_SIZE);
-                            return Some(Input::Resize(Size { width, height }));
                         }
                         _ => {}
                     }
@@ -586,9 +577,9 @@ impl<'input> Stream<'_, '_, 'input> {
             // I know there's an InputMouseState::Release, but that's because the internals of tui.rs
             // have leaked into intput.rs. input.rs indicates release by the absence of buttons being
             // held, which is InputMouseState::None. This makes it more reliable in my opinion.
-        } else if (WHEEL..WHEEL + 4).contains(&kind) {
-            let delta = if (kind & 1) != 0 { 3 } else { -3 };
-            let idx = if (kind & 2) != 0 { 0 } else { 1 };
+        } else if (WHEEL..WHEEL + 0x04).contains(&kind) {
+            let delta = if (btn & 0x01) != 0 { 1 } else { -1 };
+            let idx = if (btn & (0x02 | SHIFT)) != 0 { 0 } else { 1 };
             mouse.scroll.as_array()[idx] += delta;
             mouse.state = InputMouseState::Scroll;
         } else if (kind & !MOTION) < 3 {
@@ -670,25 +661,6 @@ mod tests {
         assert_eq!(
             parse_keys("\x1b-\x1b(\x1b)\x1b!\x1b~\x1b[A"),
             [Some(vk::UP.value())]
-        );
-    }
-
-    #[test]
-    fn test_window_size_report_is_clamped() {
-        let parse_resize = |input: &str| {
-            let mut vt_parser = vt::Parser::new();
-            let mut parser = Parser::new();
-            let events: Vec<_> = parser.parse(vt_parser.parse(input)).collect();
-            match events[..] {
-                [Input::Resize(size)] => (size.width, size.height),
-                _ => panic!("expected a single resize event"),
-            }
-        };
-        assert_eq!(parse_resize("\x1b[8;50;200t"), (200, 50));
-        assert_eq!(parse_resize("\x1b[8;0;0t"), (1, 1));
-        assert_eq!(
-            parse_resize("\x1b[8;32767;99999t"),
-            (MAX_WINDOW_SIZE, MAX_WINDOW_SIZE)
         );
     }
 

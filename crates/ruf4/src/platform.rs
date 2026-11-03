@@ -524,8 +524,8 @@ fn restore_terminal_interrupts(saved: [libc::sigaction; 2]) {
 
 /// Show the user screen (the primary buffer with the output of previously run
 /// commands) until one of `exit_keys` is pressed. The terminal stays in raw
-/// mode and all other input is discarded. A window-size event is injected on
-/// return so the next frame repaints in full.
+/// mode and all other input is discarded. On return, the next read reports the
+/// window size, which may have changed meanwhile.
 pub fn view_user_screen(exit_keys: &[InputKey]) {
     use ruf4_tui::{input, sys, vt};
 
@@ -535,7 +535,8 @@ pub fn view_user_screen(exit_keys: &[InputKey]) {
     let mut input_parser = input::Parser::new();
     'wait: loop {
         let scratch = stdext::arena::scratch_arena(None);
-        let Some(text) = sys::read_stdin(&scratch, vt_parser.read_timeout()) else {
+        // A resize is picked up on return, along with the size report requested there.
+        let Some((_, text)) = sys::read_stdin(&scratch, vt_parser.read_timeout()) else {
             break; // EOF or read error; the main loop will observe it as well.
         };
         let stream = vt_parser.parse(&text);

@@ -138,6 +138,16 @@ is therefore not part of the published tarball. Binaries built by `cargo install
 ruf4` on Windows have no icon or version info; the GitHub release builds, which
 build from a checkout, do.
 
+## Syncing with Microsoft Edit
+
+`stdext`, `tui` and `lsh` are derived from
+[Microsoft Edit](https://github.com/microsoft/edit) and were last synced with
+its commit `b7f8322` (2026-11-02). Upstream keeps the `stdext` and `tui` code
+in its `edit` crate (`crates/edit/src`), while `lsh` is its own crate there too.
+To sync again, 3-way merge upstream's changes since that commit into the
+corresponding files here, formatting upstream's files with ruf4's default
+`rustfmt` settings first, so that only real changes conflict.
+
 ## Supported platforms
 
 | Platform | Architecture | Status |

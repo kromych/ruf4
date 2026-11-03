@@ -47,9 +47,9 @@ fn main() -> ExitCode {
 }
 
 fn run() -> std::io::Result<()> {
-    let _sys_deinit = sys::init();
+    let _sys_deinit = sys::init()?;
     arena::init(SCRATCH_ARENA_CAPACITY)?;
-    sys::switch_modes()?;
+    let size = sys::switch_modes()?;
 
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -71,10 +71,12 @@ fn run() -> std::io::Result<()> {
     let mut vt_parser = vt::Parser::new();
     let mut input_parser = input::Parser::new();
     let mut tui = Tui::new()?;
+    tui.set_size(size);
     let mut state = state::State::new();
     tui.set_floater_default_bg(tui.indexed(state.theme.floater_bg));
     tui.set_floater_default_fg(tui.indexed(state.theme.floater_fg));
 
+    // The state learns the size the same way as any later change: from a resize event.
     sys::inject_window_size_into_stdin();
 
     loop {
@@ -91,13 +93,16 @@ fn run() -> std::io::Result<()> {
             .min(Duration::from_secs(1))
             .min(job_timeout);
 
-        let input = match sys::read_stdin(&scratch, read_timeout) {
-            Some(input) => input,
+        let (resize, input) = match sys::read_stdin(&scratch, read_timeout) {
+            Some(read) => read,
             None => break, // EOF or error
         };
 
         let vt_stream = vt_parser.parse(&input);
-        let input_iter = input_parser.parse(vt_stream);
+        let input_iter = resize
+            .map(input::Input::Resize)
+            .into_iter()
+            .chain(input_parser.parse(vt_stream));
 
         for ev in input_iter {
             if state.handle_global_input(&ev) {
