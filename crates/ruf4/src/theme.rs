@@ -45,6 +45,8 @@ pub struct Theme {
     pub pathbar_path_active: IndexedColor,
     pub pathbar_command: IndexedColor,
     pub pathbar_search: IndexedColor,
+    /// History suggestion after the command line cursor.
+    pub pathbar_suggestion: IndexedColor,
     pub pathbar_prompt: IndexedColor,
     pub pathbar_prompt_root: IndexedColor,
 
@@ -171,6 +173,7 @@ pub const THEME_FIELDS: &[&str] = &[
     "pathbar_path_active",
     "pathbar_command",
     "pathbar_search",
+    "pathbar_suggestion",
     "pathbar_prompt",
     "pathbar_prompt_root",
     "clock_bg",
@@ -241,6 +244,7 @@ impl Theme {
             "pathbar_path_active" => self.pathbar_path_active,
             "pathbar_command" => self.pathbar_command,
             "pathbar_search" => self.pathbar_search,
+            "pathbar_suggestion" => self.pathbar_suggestion,
             "pathbar_prompt" => self.pathbar_prompt,
             "pathbar_prompt_root" => self.pathbar_prompt_root,
             "clock_bg" => self.clock_bg,
@@ -312,6 +316,7 @@ impl Theme {
             "pathbar_path_active" => self.pathbar_path_active = color,
             "pathbar_command" => self.pathbar_command = color,
             "pathbar_search" => self.pathbar_search = color,
+            "pathbar_suggestion" => self.pathbar_suggestion = color,
             "pathbar_prompt" => self.pathbar_prompt = color,
             "pathbar_prompt_root" => self.pathbar_prompt_root = color,
             "clock_bg" => self.clock_bg = color,
@@ -393,6 +398,7 @@ impl Theme {
             pathbar_path_active: IndexedColor::BrightWhite,
             pathbar_command: IndexedColor::BrightWhite,
             pathbar_search: IndexedColor::BrightYellow,
+            pathbar_suggestion: IndexedColor::BrightBlack,
             pathbar_prompt: IndexedColor::White,
             pathbar_prompt_root: IndexedColor::BrightRed,
 

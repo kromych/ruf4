@@ -1052,6 +1052,34 @@ impl State {
         }
     }
 
+    /// History autocompletion: the rest of the most recent command that
+    /// starts with what's typed, offered while the cursor is at the end.
+    pub fn cmd_suggestion(&self) -> Option<&str> {
+        let typed = self.command_line.as_str();
+        if typed.is_empty() || self.cmd_cursor != typed.chars().count() {
+            return None;
+        }
+        self.cmd_history
+            .iter()
+            .find_map(|cmd| cmd.strip_prefix(typed).filter(|rest| !rest.is_empty()))
+    }
+
+    /// Take over the whole suggestion, or just its next word. False if there
+    /// is none.
+    fn accept_suggestion(&mut self, whole: bool) -> bool {
+        let Some(rest) = self.cmd_suggestion() else {
+            return false;
+        };
+        let len = if whole {
+            rest.len()
+        } else {
+            next_word_end(rest)
+        };
+        let accepted = rest[..len].to_string();
+        self.command_field().insert(&accepted);
+        true
+    }
+
     fn handle_command_line_input(&mut self, ev: &Input) -> bool {
         match ev {
             Input::Text(text) => {
@@ -1065,6 +1093,7 @@ impl State {
                     self.command_line.clear();
                     self.cmd_cursor = 0;
                 } else if key == vk::RETURN {
+                    // Runs what's typed, not the suggestion.
                     if !self.command_line.is_empty() {
                         fileops::execute_command(self);
                     }
@@ -1085,11 +1114,17 @@ impl State {
                 } else if key == vk::LEFT {
                     self.command_field().left();
                 } else if key == vk::RIGHT {
-                    self.command_field().right();
+                    if !self.accept_suggestion(true) {
+                        self.command_field().right();
+                    }
                 } else if key == vk::HOME {
                     self.command_field().home();
                 } else if key == vk::END {
-                    self.command_field().end();
+                    if !self.accept_suggestion(true) {
+                        self.command_field().end();
+                    }
+                } else if key == kbmod::CTRL | vk::RIGHT && self.cmd_suggestion().is_some() {
+                    self.accept_suggestion(false);
                 } else {
                     // Tab, Up, Down, function keys -- let them fall through.
                     return false;
@@ -1496,6 +1531,15 @@ impl TextField<'_> {
     fn end(&mut self) {
         *self.cursor = self.len_chars();
     }
+}
+
+/// Byte length of `s` through the end of its first word, including any
+/// whitespace before it, like Ctrl+Right in a shell.
+fn next_word_end(s: &str) -> usize {
+    let start = s.len() - s.trim_start().len();
+    s[start..]
+        .find(char::is_whitespace)
+        .map_or(s.len(), |i| start + i)
 }
 
 fn push_recent<T: PartialEq>(list: &mut Vec<T>, item: T) {

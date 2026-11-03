@@ -243,6 +243,81 @@ fn test_command_line_backspace_at_start_stays_on_line() {
     assert_eq!(s.left.path, PathBuf::from("/test")); // not ParentDir
 }
 
+// --- Command line history autocompletion ---
+
+fn state_with_history(history: &[&str]) -> State {
+    let mut s = test_state();
+    s.cmd_history = history.iter().map(|c| c.to_string()).collect();
+    s
+}
+
+fn type_text(s: &mut State, text: &str) {
+    s.handle_global_input(&Input::Text(text));
+}
+
+#[test]
+fn test_suggestion_is_most_recent_matching_command() {
+    // History is most recent first.
+    let mut s = state_with_history(&["git status", "cargo test -q", "cargo build"]);
+    assert_eq!(s.cmd_suggestion(), None);
+    type_text(&mut s, "car");
+    assert_eq!(s.cmd_suggestion(), Some("go test -q"));
+    type_text(&mut s, "go b");
+    assert_eq!(s.cmd_suggestion(), Some("uild"));
+    type_text(&mut s, "uild");
+    assert_eq!(s.cmd_suggestion(), None); // nothing left to add
+    type_text(&mut s, "x");
+    assert_eq!(s.cmd_suggestion(), None); // no match
+}
+
+#[test]
+fn test_suggestion_only_at_end_of_line() {
+    let mut s = state_with_history(&["cargo test"]);
+    type_text(&mut s, "car");
+    s.handle_global_input(&Input::Keyboard(vk::LEFT));
+    assert_eq!(s.cmd_suggestion(), None);
+    // END first moves to the end, where the suggestion shows again.
+    s.handle_global_input(&Input::Keyboard(vk::END));
+    assert_eq!(s.cmd_suggestion(), Some("go test"));
+}
+
+#[test]
+fn test_right_and_end_accept_suggestion() {
+    for key in [vk::RIGHT, vk::END] {
+        let mut s = state_with_history(&["cargo test"]);
+        type_text(&mut s, "car");
+        s.handle_global_input(&Input::Keyboard(key));
+        assert_eq!(s.command_line, "cargo test");
+        assert_eq!(s.cmd_cursor, "cargo test".len());
+    }
+}
+
+#[test]
+fn test_ctrl_right_accepts_one_word() {
+    let mut s = state_with_history(&["cargo test --workspace -q"]);
+    type_text(&mut s, "ca");
+    let ctrl_right = Input::Keyboard(kbmod::CTRL | vk::RIGHT);
+    s.handle_global_input(&ctrl_right);
+    assert_eq!(s.command_line, "cargo");
+    s.handle_global_input(&ctrl_right);
+    assert_eq!(s.command_line, "cargo test");
+    s.handle_global_input(&ctrl_right);
+    assert_eq!(s.command_line, "cargo test --workspace");
+    assert_eq!(s.cmd_suggestion(), Some(" -q"));
+}
+
+#[test]
+fn test_enter_runs_only_typed_text() {
+    let mut s = state_with_history(&["cd subdir-that-is-suggested"]);
+    type_text(&mut s, "cd");
+    assert!(s.cmd_suggestion().is_some());
+    // `cd` is handled internally (no process is spawned): with only the
+    // typed text, it goes home rather than into the suggested directory.
+    s.handle_global_input(&Input::Keyboard(vk::RETURN));
+    assert_ne!(s.left.path, PathBuf::from("/test/subdir-that-is-suggested"));
+    assert_eq!(s.cmd_history[0], "cd");
+}
+
 #[test]
 fn test_mkdir_dialog_text_editing() {
     let mut s = test_state();

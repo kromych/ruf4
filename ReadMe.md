@@ -137,13 +137,16 @@ Mission Control, media, volume). These Ctrl shortcuts work without Fn:
 ### Command line
 
 Type any text to activate the command line at the bottom of the screen.
-Commands run in the active panel's directory.
+Commands run in the active panel's directory. While typing, the most recent
+matching command from the history is suggested in gray after the cursor.
 
 | Key | Action |
 |-----|--------|
-| Enter | Execute command |
+| Enter | Execute command (as typed, without the suggestion) |
 | Escape | Cancel |
 | Backspace | Delete character |
+| Right / End | Accept the suggestion |
+| Ctrl+Right | Accept the next word of the suggestion |
 
 Commands run in the foreground with the terminal handed back to them, so
 interactive programs (a shell, `python`, `vim`, `less`) work normally. The

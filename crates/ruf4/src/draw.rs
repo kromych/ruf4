@@ -808,7 +808,17 @@ fn draw_path_bar(ctx: &mut Context, state: &State, theme: &Theme, size: Size) {
             ctx.styled_label_add_text(before);
 
             ctx.styled_label_set_attributes(Attributes::Underlined);
-            if after.is_empty() {
+            if let Some(suggestion) = state.cmd_suggestion() {
+                // The cursor sits on the first character of the suggestion.
+                let next = suggestion
+                    .char_indices()
+                    .nth(1)
+                    .map_or(suggestion.len(), |(i, _)| i);
+                ctx.styled_label_set_foreground(ctx.indexed(theme.pathbar_suggestion));
+                ctx.styled_label_add_text(&suggestion[..next]);
+                ctx.styled_label_set_attributes(Attributes::None);
+                ctx.styled_label_add_text(&suggestion[next..]);
+            } else if after.is_empty() {
                 ctx.styled_label_add_text(" ");
             } else {
                 let next = after.char_indices().nth(1).map_or(after.len(), |(i, _)| i);
