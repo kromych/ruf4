@@ -720,13 +720,17 @@ impl Drop for ChildIo {
 }
 
 fn spawn_sftp_server() -> Option<ChildIo> {
-    let path = [
-        "/usr/libexec/sftp-server",
-        "/usr/lib/openssh/sftp-server",
-        "/usr/lib/ssh/sftp-server",
-    ]
-    .iter()
-    .find(|p| std::path::Path::new(p).exists())?;
+    // `RUF4_SFTP_SERVER` points at a binary outside the system locations.
+    let path = std::env::var("RUF4_SFTP_SERVER").ok().or_else(|| {
+        [
+            "/usr/libexec/sftp-server",
+            "/usr/lib/openssh/sftp-server",
+            "/usr/lib/ssh/sftp-server",
+        ]
+        .iter()
+        .find(|p| std::path::Path::new(p).exists())
+        .map(|p| p.to_string())
+    })?;
     let mut child = std::process::Command::new(path)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
