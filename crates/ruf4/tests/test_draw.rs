@@ -102,6 +102,39 @@ fn click(x: CoordType, y: CoordType) -> Input<'static> {
 }
 
 #[test]
+fn test_panel_scrollbar_moves_in_partial_rows() {
+    let entries: Vec<_> = std::iter::once(make_entry("..", true, 0))
+        .chain((0..200).map(|i| make_entry(&format!("file{i:03}"), false, 1)))
+        .collect();
+    let mut s = State::for_testing(
+        Panel::with_entries(PathBuf::from("/test"), entries),
+        Panel::with_entries(PathBuf::from("/test"), vec![make_entry("..", true, 0)]),
+    );
+    let mut screen = Screen::new(80, 24);
+    // The left panel's scrollbar is the column right inside its border,
+    // from the first entry (the one under the column headers) on.
+    let bar = |rows: &[String]| -> String {
+        let first = rows.iter().position(|r| r.contains("Name")).unwrap() + 1;
+        rows[first..]
+            .iter()
+            .filter_map(|r| r.chars().nth(80 / 2 - 2))
+            .take_while(|c| " ▁▂▃▄▅▆▇█".contains(*c))
+            .collect()
+    };
+
+    let top = bar(&screen.rows(&mut s, None));
+    assert!(top.starts_with('█'), "{top:?}");
+
+    // Scrolled a little, the thumb starts partway through a row.
+    for _ in 0..40 {
+        screen.rows(&mut s, Some(Input::Keyboard(vk::DOWN)));
+    }
+    let scrolled = bar(&screen.rows(&mut s, None));
+    assert!(scrolled.contains(|c| "▁▂▃▄▅▆▇".contains(c)), "{scrolled:?}");
+    assert_ne!(top, scrolled);
+}
+
+#[test]
 fn test_command_line_suggestion_is_dimmed() {
     let mut s = test_state();
     s.cmd_history = vec!["cargo test".to_string()];

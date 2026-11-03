@@ -79,6 +79,10 @@ pub struct Theme {
     pub floater_bg: IndexedColor,
     pub floater_fg: IndexedColor,
 
+    // ── Scrollbars ─────────────────────────────────────────────────────
+    pub scrollbar_track: IndexedColor,
+    pub scrollbar_thumb: IndexedColor,
+
     // ── Syntax highlight ───────────────────────────────────────────────
     pub hl_comment: IndexedColor,
     pub hl_string: IndexedColor,
@@ -199,6 +203,8 @@ pub const THEME_FIELDS: &[&str] = &[
     "dialog_shell_scroll_info",
     "floater_bg",
     "floater_fg",
+    "scrollbar_track",
+    "scrollbar_thumb",
     "hl_comment",
     "hl_string",
     "hl_keyword",
@@ -271,6 +277,8 @@ impl Theme {
             "dialog_shell_scroll_info" => self.dialog_shell_scroll_info,
             "floater_bg" => self.floater_bg,
             "floater_fg" => self.floater_fg,
+            "scrollbar_track" => self.scrollbar_track,
+            "scrollbar_thumb" => self.scrollbar_thumb,
             "hl_comment" => self.hl_comment,
             "hl_string" => self.hl_string,
             "hl_keyword" => self.hl_keyword,
@@ -344,6 +352,8 @@ impl Theme {
             "dialog_shell_scroll_info" => self.dialog_shell_scroll_info = color,
             "floater_bg" => self.floater_bg = color,
             "floater_fg" => self.floater_fg = color,
+            "scrollbar_track" => self.scrollbar_track = color,
+            "scrollbar_thumb" => self.scrollbar_thumb = color,
             "hl_comment" => self.hl_comment = color,
             "hl_string" => self.hl_string = color,
             "hl_keyword" => self.hl_keyword = color,
@@ -435,6 +445,10 @@ impl Theme {
             // Floaters
             floater_bg: IndexedColor::Cyan,
             floater_fg: IndexedColor::Black,
+
+            // Scrollbars, colored like Microsoft Edit's.
+            scrollbar_track: IndexedColor::BrightBlack,
+            scrollbar_thumb: IndexedColor::BrightWhite,
 
             // Syntax highlighting
             hl_comment: IndexedColor::BrightBlack,
