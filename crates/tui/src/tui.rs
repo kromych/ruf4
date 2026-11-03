@@ -2053,12 +2053,21 @@ impl<'a> Context<'a, '_> {
             unreachable!();
         };
 
+        let len = content.text.len();
+        if let Some(last) = content.chunks.last_mut()
+            && last.offset == len
+        {
+            // No text has this style yet, so change it rather than ignore the
+            // call, e.g. when an attribute was set right before this color.
+            last.fg = fg;
+            return;
+        }
         let last = content.chunks.last().unwrap_or(&INVALID_STYLED_TEXT_CHUNK);
-        if last.offset != content.text.len() && last.fg != fg {
+        if last.fg != fg {
             content.chunks.push(
                 self.arena(),
                 StyledTextChunk {
-                    offset: content.text.len(),
+                    offset: len,
                     fg,
                     attr: last.attr,
                 },
@@ -2073,12 +2082,19 @@ impl<'a> Context<'a, '_> {
             unreachable!();
         };
 
+        let len = content.text.len();
+        if let Some(last) = content.chunks.last_mut()
+            && last.offset == len
+        {
+            last.attr = attr;
+            return;
+        }
         let last = content.chunks.last().unwrap_or(&INVALID_STYLED_TEXT_CHUNK);
-        if last.offset != content.text.len() && last.attr != attr {
+        if last.attr != attr {
             content.chunks.push(
                 self.arena(),
                 StyledTextChunk {
-                    offset: content.text.len(),
+                    offset: len,
                     fg: last.fg,
                     attr,
                 },
