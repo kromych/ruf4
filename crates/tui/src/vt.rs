@@ -251,6 +251,14 @@ impl<'input> Stream<'_, 'input> {
                         self.off += 1;
 
                         match c {
+                            // The Linux console sends F1 to F5 as `ESC [ [ A` to `ESC [ [ E`.
+                            // No CSI sequence ends in `[`, so treat it like a private byte there.
+                            b'[' if self.parser.csi.private_byte == '\0'
+                                && self.parser.csi.param_count == 0
+                                && self.parser.csi.params[0] == 0 =>
+                            {
+                                self.parser.csi.private_byte = '[';
+                            }
                             0x40..=0x7e => {
                                 self.parser.state = State::Ground;
                                 self.parser.csi.final_byte = c as char;
@@ -418,5 +426,33 @@ mod tests {
         // The next sequence in a separate input still parses.
         assert_eq!(parse_csi(&mut parser, "\x1b[A"), [('A', vec![])]);
         assert_eq!(parse_csi(&mut parser, "\x1b[1;2m"), [('m', vec![1, 2])]);
+    }
+
+    /// Returns the private and final byte of each CSI sequence in `input`.
+    fn parse_csi_private(parser: &mut Parser, input: &str) -> Vec<(char, char)> {
+        let mut stream = parser.parse(input);
+        let mut res = Vec::new();
+        while let Some(token) = stream.next() {
+            if let Token::Csi(csi) = token {
+                res.push((csi.private_byte, csi.final_byte));
+            }
+        }
+        res
+    }
+
+    #[test]
+    fn test_csi_linux_console_function_keys() {
+        let mut parser = Parser::new();
+        assert_eq!(
+            parse_csi_private(&mut parser, "\x1b[[A\x1b[[E\x1b[A"),
+            [('[', 'A'), ('[', 'E'), ('\0', 'A')]
+        );
+
+        // Split across reads.
+        assert!(parse_csi_private(&mut parser, "\x1b[").is_empty());
+        assert_eq!(parse_csi_private(&mut parser, "[B"), [('[', 'B')]);
+
+        // Only right after the `[` that starts the sequence.
+        assert_eq!(parse_csi_private(&mut parser, "\x1b[<["), [('<', '[')]);
     }
 }

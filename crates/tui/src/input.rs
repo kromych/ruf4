@@ -379,6 +379,13 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
                     }
                     _ => {}
                 },
+                vt::Token::Csi(csi) if csi.private_byte == '[' => {
+                    // The Linux console's F1 to F5: `ESC [ [ A` to `ESC [ [ E`.
+                    if let 'A'..='E' = csi.final_byte {
+                        let key = vk::F1.value() + csi.final_byte as u32 - 'A' as u32;
+                        return Some(Input::Keyboard(InputKey::new(key)));
+                    }
+                }
                 vt::Token::Csi(csi) => {
                     match csi.final_byte {
                         'A'..='H' => {
@@ -661,6 +668,23 @@ mod tests {
         assert_eq!(
             parse_keys("\x1b-\x1b(\x1b)\x1b!\x1b~\x1b[A"),
             [Some(vk::UP.value())]
+        );
+    }
+
+    #[test]
+    fn test_linux_console_function_keys() {
+        let key = |key: InputKey| Some(key.value());
+        assert_eq!(
+            parse_keys("\x1b[[A\x1b[[B\x1b[[C\x1b[[D\x1b[[E\x1b[A\x1b[17~"),
+            [
+                key(vk::F1),
+                key(vk::F2),
+                key(vk::F3),
+                key(vk::F4),
+                key(vk::F5),
+                key(vk::UP),
+                key(vk::F6),
+            ]
         );
     }
 
