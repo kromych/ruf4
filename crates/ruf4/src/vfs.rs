@@ -1059,10 +1059,14 @@ struct RemoteWriter {
     host: HostSpec,
     handle: Vec<u8>,
     offset: u64,
+    closed: bool,
 }
 
 impl Write for RemoteWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if self.closed {
+            return Err(io::Error::other("write after flush"));
+        }
         if buf.is_empty() {
             return Ok(0);
         }
@@ -1074,14 +1078,23 @@ impl Write for RemoteWriter {
         Ok(n)
     }
 
+    /// Closes the file, which ends writing. A server may report a failed
+    /// write (e.g. quota exceeded) only in its reply to the close, and that's
+    /// the last chance to notice before a move deletes the source.
     fn flush(&mut self) -> io::Result<()> {
-        Ok(())
+        if self.closed {
+            return Ok(());
+        }
+        self.closed = true;
+        with_conn(&self.host, |c| c.close(&self.handle))
     }
 }
 
 impl Drop for RemoteWriter {
     fn drop(&mut self) {
-        close_handle(&self.host, &self.handle);
+        if !self.closed {
+            close_handle(&self.host, &self.handle);
+        }
     }
 }
 
@@ -1111,6 +1124,7 @@ pub fn open_write(path: &Path) -> io::Result<Box<dyn Write>> {
                 host: r.host,
                 handle,
                 offset: 0,
+                closed: false,
             }))
         }
         None => Ok(Box::new(fs::File::create(path)?)),
