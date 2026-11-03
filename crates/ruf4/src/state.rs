@@ -1070,7 +1070,9 @@ impl State {
                     }
                     self.command_line_active = false;
                     self.cmd_cursor = 0;
-                } else if key == vk::BACK && self.cmd_cursor > 0 {
+                } else if key == vk::BACK {
+                    // At the start of the line this does nothing, rather than
+                    // falling through to the panel (parent directory).
                     self.command_field().backspace();
                     if self.command_line.is_empty() {
                         self.command_line_active = false;

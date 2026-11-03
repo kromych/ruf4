@@ -232,6 +232,18 @@ fn test_command_line_delete_and_cursor_moves() {
 }
 
 #[test]
+fn test_command_line_backspace_at_start_stays_on_line() {
+    let mut s = test_state();
+    s.command_line_active = true;
+    s.command_line = "abc".to_string();
+    s.cmd_cursor = 0;
+    s.handle_global_input(&Input::Keyboard(vk::BACK));
+    assert_eq!(s.command_line, "abc");
+    assert!(s.command_line_active);
+    assert_eq!(s.left.path, PathBuf::from("/test")); // not ParentDir
+}
+
+#[test]
 fn test_mkdir_dialog_text_editing() {
     let mut s = test_state();
     s.handle_global_input(&Input::Keyboard(vk::F7)); // open MkDir
