@@ -149,7 +149,7 @@ use std::{io, iter, mem, ptr, time};
 
 use stdext::arena::{Arena, scratch_arena};
 use stdext::collections::{BString, BVec};
-use stdext::{arena_format, arena_write_fmt, opt_ptr_eq, str_from_raw_parts};
+use stdext::{arena_write_fmt, opt_ptr_eq, str_from_raw_parts};
 
 use crate::buffer::{CursorMovement, MoveLineDirection, RcTextBuffer, TextBuffer, TextBufferCell};
 use crate::cell::*;
@@ -1437,7 +1437,7 @@ impl<'a> Drop for Context<'a, '_> {
 }
 
 impl<'a> Context<'a, '_> {
-    /// Get an arena for temporary allocations such as for [`arena_format`].
+    /// Get an arena for temporary allocations such as for [`arena_format`](stdext::arena_format).
     pub fn arena(&self) -> &'a Arena {
         // TODO:
         // `Context` borrows `Tui` for lifetime 'a, so `self.tui` should be `&'a Tui`, right?
@@ -1836,12 +1836,13 @@ impl<'a> Context<'a, '_> {
         self.focus_on_first_present();
 
         let mut last_node = self.tree.last_node.borrow_mut();
-        let title = if title.is_empty() {
-            BString::empty()
-        } else {
-            arena_format!(self.arena(), " {} ", title)
-        };
-        last_node.content = NodeContent::Modal(title);
+        let mut title_text = BString::empty();
+        if !title.is_empty() {
+            title_text.push(self.arena(), ' ');
+            push_sanitized(self.arena(), &mut title_text, title);
+            title_text.push(self.arena(), ' ');
+        }
+        last_node.content = NodeContent::Modal(title_text);
         self.last_modal = Some(self.tree.last_node);
     }
 
@@ -2092,7 +2093,7 @@ impl<'a> Context<'a, '_> {
             unreachable!();
         };
 
-        content.text.push_str(self.arena(), text);
+        push_sanitized(self.arena(), &mut content.text, text);
     }
 
     /// Ends the current label block.
@@ -3834,6 +3835,49 @@ const INVALID_STYLED_TEXT_CHUNK: StyledTextChunk = StyledTextChunk {
     attr: Attributes::None,
 };
 
+/// Appends `text` to `dst`, made safe to send to the terminal verbatim.
+///
+/// The framebuffer expects no control characters: a raw tab, CR, ESC, ... would
+/// move the terminal cursor instead of filling a cell. Some other characters
+/// are measured differently by terminals than by us. Either misaligns the rest
+/// of the row. Every replacement is as wide as what it replaces (zero-width
+/// ones are dropped), which keeps the width math done by callers valid.
+fn push_sanitized<'a>(arena: &'a Arena, dst: &mut BString<'a>, text: &str) {
+    if text.bytes().all(|b| (0x20..0x7f).contains(&b)) {
+        dst.push_str(arena, text);
+        return;
+    }
+
+    let mut clean = 0;
+    for (i, c) in text.char_indices() {
+        let replacement = match c {
+            // C0 controls map onto the Control Pictures block (␀..␟), DEL onto ␡.
+            '\0'..='\x1f' => char::from_u32(0x2400 + c as u32),
+            '\x7f' => Some('\u{2421}'),
+            // C1 controls have no pictures of their own: use ␦ (substitute).
+            '\u{80}'..='\u{9f}' => Some('\u{2426}'),
+            // One column to us, but glibc's wcwidth() says -1 (unprintable).
+            '\u{2028}' | '\u{2029}' => Some('\u{2424}'),
+            // Zero-width to us, but not to every terminal.
+            '\u{feff}' => None,
+            // Bidi controls: a terminal that implements bidi would reorder the
+            // text, e.g. make "invoice\u{202e}fdp.exe" read as "invoiceexe.pdf".
+            '\u{061c}'
+            | '\u{200e}'
+            | '\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2066}'..='\u{2069}' => None,
+            _ => continue,
+        };
+        dst.push_str(arena, &text[clean..i]);
+        if let Some(r) = replacement {
+            dst.push(arena, r);
+        }
+        clean = i + c.len_utf8();
+    }
+    dst.push_str(arena, &text[clean..]);
+}
+
 /// NOTE: Must not contain items that require drop().
 struct TextContent<'a> {
     text: BString<'a>,
@@ -4184,6 +4228,68 @@ impl<'a> Node<'a> {
                     child.layout_children(clip);
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sanitized(text: &str) -> String {
+        let arena = Arena::new(stdext::MEBI).unwrap();
+        let mut s = BString::empty();
+        push_sanitized(&arena, &mut s, text);
+        s.to_string()
+    }
+
+    #[test]
+    fn push_sanitized_passes_plain_text_through() {
+        assert_eq!(sanitized("plain ascii"), "plain ascii");
+        assert_eq!(sanitized("Привет 中文 ½ é"), "Привет 中文 ½ é");
+    }
+
+    #[test]
+    fn push_sanitized_replaces_controls() {
+        assert_eq!(sanitized("a\tb\rc\x1b[31m\x07\x7f"), "a␉b␍c␛[31m␇␡");
+        assert_eq!(sanitized("x\u{85}y\u{9b}z"), "x␦y␦z");
+        assert_eq!(sanitized("line\u{2028}para\u{2029}"), "line␤para␤");
+    }
+
+    #[test]
+    fn push_sanitized_drops_bom_and_bidi_controls() {
+        assert_eq!(sanitized("\u{feff}***\u{feff}"), "***");
+        assert_eq!(sanitized("invoice\u{202e}fdp.exe"), "invoicefdp.exe");
+        assert_eq!(sanitized("\u{2067}a\u{200f}b\u{2069}"), "ab");
+    }
+
+    #[test]
+    fn push_sanitized_keeps_widths() {
+        use crate::unicode::tables::*;
+
+        let width = |s: &str, ambiguous: usize| -> usize {
+            s.chars()
+                .map(|c| {
+                    ucd_grapheme_cluster_character_width(ucd_grapheme_cluster_lookup(c), ambiguous)
+                })
+                .sum()
+        };
+        let specials = [
+            '\u{61c}', '\u{200e}', '\u{200f}', '\u{2028}', '\u{2029}', '\u{feff}',
+        ];
+        let replaced = ('\0'..='\u{9f}')
+            .chain('\u{202a}'..='\u{202e}')
+            .chain('\u{2066}'..='\u{2069}')
+            .chain(specials)
+            .filter(|c| !(' '..'\x7f').contains(c));
+        for c in replaced {
+            let original = c.to_string();
+            let s = sanitized(&original);
+            assert_ne!(s, original, "U+{:04X} passed through", c as u32);
+            // Placeholders must not be East Asian Ambiguous, or their width
+            // would depend on the terminal.
+            assert_eq!(width(&s, 1), width(&original, 1), "U+{:04X}", c as u32);
+            assert_eq!(width(&s, 2), width(&original, 1), "U+{:04X}", c as u32);
         }
     }
 }
