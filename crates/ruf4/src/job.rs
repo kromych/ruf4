@@ -146,8 +146,31 @@ pub fn spawn_copy_move(pairs: Vec<(PathBuf, PathBuf)>, is_copy: bool) -> Job {
 /// Spawn a download of one file to a temporary target, overwriting silently.
 pub fn spawn_download(src: PathBuf, target: PathBuf) -> Job {
     spawn(JobKind::Download, move |tx, rx, cancel| {
-        run_copy_move(vec![(src, target)], true, true, &tx, &rx, &cancel)
+        // Opening a file wants its contents. Copied as is, a symlink would be
+        // recreated locally, pointing wherever the remote side says.
+        match resolve_symlinks(&src) {
+            Ok(src) => run_copy_move(vec![(src, target)], true, true, &tx, &rx, &cancel),
+            Err(e) => {
+                let errors = vec![format!("{}: {e}", fileops::base_name(&src))];
+                let _ = tx.send(JobEvent::Finished { errors });
+            }
+        }
     })
+}
+
+/// Follow `path` through any chain of symlinks to what it finally names.
+fn resolve_symlinks(path: &Path) -> std::io::Result<PathBuf> {
+    let mut path = path.to_path_buf();
+    // Linux's limit, so that a link loop ends in an error.
+    for _ in 0..40 {
+        if vfs::symlink_meta(&path)?.kind != vfs::Kind::Symlink {
+            return Ok(path);
+        }
+        let target = vfs::read_link(&path)?;
+        let dir = vfs::parent(&path).unwrap_or_else(|| path.clone());
+        path = vfs::join(&dir, &target);
+    }
+    Err(std::io::Error::other("too many levels of symbolic links"))
 }
 
 /// Spawn a delete job over the given paths.
