@@ -462,10 +462,28 @@ impl Transfer<'_> {
             self.fail(target, "cannot copy directory into itself");
             return false;
         }
-        if !merge && let Err(e) = vfs::create_dir_all(target, meta.mode) {
+        // A new directory starts out writable by us, so that its contents can
+        // go in even if the source's mode doesn't allow that (e.g. 0555). The
+        // owner bits the source lacks are taken away once the contents are in.
+        let added = match meta.mode {
+            Some(mode) if !merge => 0o700 & !mode,
+            _ => 0,
+        };
+        if !merge && let Err(e) = vfs::create_dir_all(target, meta.mode.map(|m| m | 0o700)) {
             self.fail(target, e);
             return false;
         }
+        let complete = self.transfer_children(src, target);
+        if added != 0
+            && let Err(e) = vfs::remove_mode_bits(target, added)
+        {
+            self.fail(target, e);
+            return false;
+        }
+        complete
+    }
+
+    fn transfer_children(&mut self, src: &Path, target: &Path) -> bool {
         let children = match vfs::read_dir_meta(src) {
             Ok(children) => children,
             Err(e) => {

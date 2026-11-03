@@ -1110,6 +1110,24 @@ pub fn rename(src: &Path, dst: &Path) -> io::Result<()> {
     }
 }
 
+/// Clear the permission `bits` of `path`, keeping the rest of its mode. Does
+/// nothing where the filesystem has no permission bits.
+pub fn remove_mode_bits(path: &Path, bits: u32) -> io::Result<()> {
+    let Some(mode) = symlink_meta(path)?.mode else {
+        return Ok(());
+    };
+    match parse_remote(path) {
+        Some(r) => with_conn(&r.host, |c| c.set_permissions(&r.path, mode & !bits)),
+        #[cfg(unix)]
+        None => {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(mode & !bits))
+        }
+        #[cfg(not(unix))]
+        None => Ok(()),
+    }
+}
+
 /// Remove an empty directory.
 pub fn remove_dir(path: &Path) -> io::Result<()> {
     match parse_remote(path) {

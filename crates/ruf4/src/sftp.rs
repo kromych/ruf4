@@ -20,6 +20,7 @@ const SSH_FXP_CLOSE: u8 = 4;
 const SSH_FXP_READ: u8 = 5;
 const SSH_FXP_WRITE: u8 = 6;
 const SSH_FXP_LSTAT: u8 = 7;
+const SSH_FXP_SETSTAT: u8 = 9;
 const SSH_FXP_OPENDIR: u8 = 11;
 const SSH_FXP_READDIR: u8 = 12;
 const SSH_FXP_REMOVE: u8 = 13;
@@ -538,6 +539,14 @@ impl<T: Read + Write> Client<T> {
         put_str(&mut body, path);
         put_mode_attrs(&mut body, mode);
         self.request_status(SSH_FXP_MKDIR, &body)
+    }
+
+    /// Set the permission bits of `path`.
+    pub fn set_permissions(&mut self, path: &str, mode: u32) -> io::Result<()> {
+        let mut body = Vec::new();
+        put_str(&mut body, path);
+        put_mode_attrs(&mut body, Some(mode));
+        self.request_status(SSH_FXP_SETSTAT, &body)
     }
 
     pub fn rmdir(&mut self, path: &str) -> io::Result<()> {

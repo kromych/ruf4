@@ -300,6 +300,46 @@ fn copy_skips_fifos_instead_of_blocking_on_them() {
     cleanup(&root);
 }
 
+/// A read-only directory (0555, as in Go's module cache) is copied with its
+/// contents, and ends up with the source's mode.
+#[cfg(unix)]
+#[test]
+fn copy_keeps_read_only_directories_and_their_contents() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // Nothing here may panic before the cleanup below, which needs the
+    // directories writable again.
+    let mode = |p: &Path| Some(fs::metadata(p).ok()?.permissions().mode() & 0o777);
+    let set_mode = |p: &Path, m: u32| fs::set_permissions(p, fs::Permissions::from_mode(m));
+
+    let root = temp_dir();
+    let src = root.join("src");
+    fs::create_dir_all(src.join("sub")).unwrap();
+    fs::write(src.join("a.txt"), b"a").unwrap();
+    fs::write(src.join("sub/b.txt"), b"b").unwrap();
+    set_mode(&src.join("sub"), 0o500).unwrap();
+    set_mode(&src, 0o555).unwrap();
+    let dst = root.join("dst");
+
+    let mut job = job::spawn_copy_move(vec![(src.clone(), dst.clone())], true);
+    let errors = drive(&mut job, no_overwrite);
+
+    let copied = (
+        fs::read(dst.join("a.txt")).ok(),
+        fs::read(dst.join("sub/b.txt")).ok(),
+    );
+    let modes = (mode(&dst), mode(&dst.join("sub")));
+    for dir in [&src, &dst] {
+        let _ = set_mode(dir, 0o755);
+        let _ = set_mode(&dir.join("sub"), 0o755);
+    }
+    cleanup(&root);
+
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(copied, (Some(b"a".to_vec()), Some(b"b".to_vec())));
+    assert_eq!(modes, (Some(0o555), Some(0o500)));
+}
+
 /// Moving `Makefile` and `makefile` from a case-sensitive filesystem onto a
 /// case-insensitive one must not let one replace the other and then delete
 /// both sources. Needs such a pair of filesystems, e.g. under WSL a Linux

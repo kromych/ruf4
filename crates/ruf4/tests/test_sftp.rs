@@ -782,6 +782,10 @@ fn against_real_openssh_sftp_server() {
     c.close(&handle).unwrap();
     let perms = c.stat(&key).unwrap().permissions;
     assert_eq!(perms.map(|m| m & 0o777), Some(0o600));
+    c.set_permissions(&private, 0o500).unwrap();
+    let perms = c.stat(&private).unwrap().permissions;
+    assert_eq!(perms.map(|m| m & 0o777), Some(0o500));
+    c.set_permissions(&private, 0o700).unwrap();
     let file = format!("{root_s}/data.bin");
     let payload: Vec<u8> = (0..(MAX_DATA * 2 + 17)).map(|i| (i % 256) as u8).collect();
     let handle = c.open(&file, OPEN_WRITE | OPEN_CREAT | OPEN_TRUNC).unwrap();
