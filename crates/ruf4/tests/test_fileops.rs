@@ -333,3 +333,30 @@ fn test_rename_case_only_change() {
     assert_eq!(names, ["A.txt"]);
     cleanup(&root);
 }
+
+/// A symlink resolves to the same file as its target, but renaming it onto
+/// the target would replace the target with a link to itself.
+#[cfg(unix)]
+#[test]
+fn test_rename_refuses_symlink_onto_its_target() {
+    let root = temp_dir();
+    fs::write(root.join("v2.txt"), "data").unwrap();
+    std::os::unix::fs::symlink("v2.txt", root.join("latest")).unwrap();
+    let mut s = state_in(&root);
+    s.left.cursor = s
+        .left
+        .entries
+        .iter()
+        .position(|e| e.name == "latest")
+        .unwrap();
+
+    ruf4::fileops::do_rename(&mut s, "v2.txt");
+    assert!(matches!(s.dialog, ruf4::state::Dialog::Error { .. }));
+    assert_eq!(fs::read_to_string(root.join("v2.txt")).unwrap(), "data");
+    assert!(
+        fs::symlink_metadata(root.join("latest"))
+            .unwrap()
+            .is_symlink()
+    );
+    cleanup(&root);
+}

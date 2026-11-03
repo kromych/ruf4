@@ -271,8 +271,10 @@ pub fn do_rename(state: &mut State, new_name: &str) {
     let old_path = vfs::join(&panel.path, &panel.entries[panel.cursor].name);
     let new_path = vfs::join(&panel.path, new_name);
     // Renaming onto an existing entry would silently replace it. Changing
-    // just the case of a name on a case-insensitive filesystem is fine.
-    if vfs::symlink_meta(&new_path).is_ok() && !vfs::same_file(&old_path, &new_path) {
+    // just the case of a name on a case-insensitive filesystem is fine. That
+    // has to compare the entries themselves: a symlink resolves to the same
+    // file as its target, yet renaming it onto the target destroys the target.
+    if vfs::symlink_meta(&new_path).is_ok() && !vfs::same_entry(&old_path, &new_path) {
         state.dialog = Dialog::Error {
             message: format!("Rename failed: \"{new_name}\" already exists"),
         };

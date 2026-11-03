@@ -761,6 +761,33 @@ pub fn is_dir(path: &Path) -> bool {
     }
 }
 
+/// Whether `a` and `b` are one directory entry spelled two ways, as names
+/// that differ only in case are on a case-insensitive filesystem. Unlike
+/// [`same_file`], a symlink and the file it points to are different entries,
+/// and so are two hard links of one file.
+pub fn same_entry(a: &Path, b: &Path) -> bool {
+    if a.to_string_lossy().to_lowercase() != b.to_string_lossy().to_lowercase() {
+        return false;
+    }
+    #[cfg(unix)]
+    if !is_remote(a) && !is_remote(b) {
+        use std::os::unix::fs::MetadataExt;
+        return match (fs::symlink_metadata(a), fs::symlink_metadata(b)) {
+            (Ok(ma), Ok(mb)) => (ma.dev(), ma.ino()) == (mb.dev(), mb.ino()),
+            _ => false,
+        };
+    }
+    // Without inode numbers: two links are interchangeable if they point to
+    // the same place, and anything else is compared by what it resolves to.
+    match (symlink_meta(a), symlink_meta(b)) {
+        (Ok(ma), Ok(mb)) if ma.kind == Kind::Symlink && mb.kind == Kind::Symlink => {
+            matches!((read_link(a), read_link(b)), (Ok(ta), Ok(tb)) if ta == tb)
+        }
+        (Ok(ma), Ok(mb)) if ma.kind != Kind::Symlink && mb.kind != Kind::Symlink => same_file(a, b),
+        _ => false,
+    }
+}
+
 /// Whether the two paths refer to the same file.
 pub fn same_file(a: &Path, b: &Path) -> bool {
     match (parse_remote(a), parse_remote(b)) {
