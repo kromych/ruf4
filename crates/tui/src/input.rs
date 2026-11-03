@@ -613,3 +613,19 @@ impl<'input> Stream<'_, '_, 'input> {
         Some(Input::Mouse(mouse))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_xterm_mouse_too_many_params() {
+        let input = format!("\x1b[<{}M\x1b[A", ";".repeat(40));
+        let mut vt_parser = vt::Parser::new();
+        let mut parser = Parser::new();
+        let events: Vec<_> = parser.parse(vt_parser.parse(&input)).collect();
+        assert_eq!(events.len(), 2);
+        assert!(matches!(events[0], Input::Mouse(_)));
+        assert!(matches!(events[1], Input::Keyboard(key) if key == vk::UP));
+    }
+}
