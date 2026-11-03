@@ -64,7 +64,7 @@ fn test_ops_delete_nonexistent_returns_error() {
 #[test]
 fn test_ops_build_pairs_single_file_to_path() {
     let src = PathBuf::from("/src/file.txt");
-    let pairs = ops_build_pairs(std::slice::from_ref(&src), "/dst/renamed.txt");
+    let pairs = ops_build_pairs(std::slice::from_ref(&src), Path::new("/dst/renamed.txt"));
 
     assert_eq!(pairs.len(), 1);
     assert_eq!(pairs[0].0, src);
@@ -79,7 +79,7 @@ fn test_ops_build_pairs_multiple_into_dir() {
 
     let src_a = PathBuf::from("/src/a.txt");
     let src_b = PathBuf::from("/src/b.txt");
-    let pairs = ops_build_pairs(&[src_a.clone(), src_b.clone()], dest.to_str().unwrap());
+    let pairs = ops_build_pairs(&[src_a.clone(), src_b.clone()], &dest);
 
     assert_eq!(pairs.len(), 2);
     assert_eq!(pairs[0].1, dest.join("a.txt"));

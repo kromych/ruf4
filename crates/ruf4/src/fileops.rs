@@ -45,8 +45,8 @@ pub fn ops_delete(paths: &[PathBuf]) -> Vec<String> {
     errors
 }
 
-pub fn ops_build_pairs(sources: &[PathBuf], dest: &str) -> Vec<(PathBuf, PathBuf)> {
-    let dest_path = PathBuf::from(dest);
+pub fn ops_build_pairs(sources: &[PathBuf], dest: &Path) -> Vec<(PathBuf, PathBuf)> {
+    let dest_path = dest.to_path_buf();
     let dest_is_dir = vfs::is_dir(&dest_path);
     let mut pairs = Vec::new();
 
@@ -235,14 +235,25 @@ pub fn do_move(state: &mut State, dest: &str) {
 }
 
 fn do_copy_move(state: &mut State, dest: &str, is_copy: bool) {
-    // Connect a remote destination now: the worker cannot prompt for
-    // authentication.
-    if let Err(message) = vfs::ensure_host(Path::new(dest)) {
-        state.dialog = Dialog::Error { message };
+    if dest.trim().is_empty() {
+        state.dialog = Dialog::None;
         return;
     }
+    // Relative to the panel, like `cd`, not to wherever ruf4 was started.
+    let dest = resolve_cd_target(&state.active_panel().path, dest);
+    // Connect a remote destination now: the worker cannot prompt for
+    // authentication.
+    let dest = match vfs::ensure_host(&dest)
+        .and_then(|()| vfs::with_remote_home(&dest).map_err(|e| format!("{}: {e}", dest.display())))
+    {
+        Ok(dest) => dest,
+        Err(message) => {
+            state.dialog = Dialog::Error { message };
+            return;
+        }
+    };
     let sources = state.active_panel().selected_or_current();
-    let pairs = ops_build_pairs(&sources, dest);
+    let pairs = ops_build_pairs(&sources, &dest);
     if pairs.is_empty() {
         state.dialog = Dialog::None;
         return;

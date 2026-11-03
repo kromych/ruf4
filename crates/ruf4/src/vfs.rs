@@ -476,6 +476,23 @@ pub fn ensure_host(path: &Path) -> Result<(), String> {
     }
 }
 
+/// Substitute the remote home directory for the empty path of `ssh://host`,
+/// which would otherwise act as `/` once joined with a name. Other paths are
+/// returned as is.
+pub fn with_remote_home(path: &Path) -> io::Result<PathBuf> {
+    match parse_remote(path) {
+        Some(r) if r.path.is_empty() => {
+            let home = with_conn(&r.host, |c| c.realpath("."))?;
+            Ok(RemotePath {
+                host: r.host,
+                path: normalize_posix(&home),
+            }
+            .to_path_buf())
+        }
+        _ => Ok(path.to_path_buf()),
+    }
+}
+
 // ── Navigation ──────────────────────────────────────────────────────────────
 
 /// Resolve `path` to a directory the panel can show. Local paths are
