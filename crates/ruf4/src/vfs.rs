@@ -779,8 +779,15 @@ pub fn same_file(a: &Path, b: &Path) -> bool {
             (Ok(ca), Ok(cb)) => ca == cb,
             _ => false,
         },
-        (Some(x), Some(y)) => {
-            x.host == y.host && normalize_posix(&x.path) == normalize_posix(&y.path)
+        (Some(x), Some(y)) if same_host(&x.host, &y.host) => {
+            let (px, py) = (normalize_posix(&x.path), normalize_posix(&y.path));
+            // Symlinked directories (`/tmp` and `/private/tmp` on macOS) only
+            // tell themselves apart on the server.
+            px == py
+                || with_open_conn(&x.host, |c| {
+                    Ok(resolve_existing(c, &px) == resolve_existing(c, &py))
+                })
+                .unwrap_or(false)
         }
         _ => false,
     }
@@ -792,7 +799,7 @@ pub fn same_file(a: &Path, b: &Path) -> bool {
 pub fn same_domain(a: &Path, b: &Path) -> bool {
     match (parse_remote(a), parse_remote(b)) {
         (None, None) => true,
-        (Some(x), Some(y)) => x.host == y.host,
+        (Some(x), Some(y)) => same_host(&x.host, &y.host),
         _ => false,
     }
 }
@@ -808,12 +815,132 @@ pub fn dir_contains(outer: &Path, inner: &Path) -> bool {
             (Ok(co), Ok(ci)) => ci.starts_with(&co),
             _ => false,
         },
-        (Some(a), Some(b)) if a.host == b.host => {
-            let outer = normalize_posix(&a.path);
-            let inner = normalize_posix(&b.path);
-            inner == outer || outer == "/" || inner.starts_with(&format!("{outer}/"))
+        (Some(a), Some(b)) if same_host(&a.host, &b.host) => {
+            let contains = |outer: &str, inner: &str| {
+                inner == outer || outer == "/" || inner.starts_with(&format!("{outer}/"))
+            };
+            let (outer, inner) = (normalize_posix(&a.path), normalize_posix(&b.path));
+            contains(&outer, &inner)
+                || with_open_conn(&a.host, |c| {
+                    Ok(contains(
+                        &resolve_existing(c, &outer),
+                        &resolve_existing(c, &inner),
+                    ))
+                })
+                .unwrap_or(false)
         }
         _ => false,
+    }
+}
+
+// ── Host identity ───────────────────────────────────────────────────────────
+
+/// Where ssh actually connects for a destination, after `~/.ssh/config`
+/// (aliases, `HostName`, `Port`, proxies). Different spellings of a machine,
+/// like `ssh://box` and `ssh://deploy@box.example.com:22`, share it. The user
+/// isn't part of it: the files are the same whoever logs in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Endpoint {
+    pub hostname: String,
+    pub port: String,
+    /// `ProxyJump` and `ProxyCommand`: one name behind different proxies may
+    /// be different machines.
+    pub proxy: String,
+}
+
+/// Parse the output of `ssh -G` (one `key value` per line).
+pub fn endpoint_from_ssh_g(text: &str) -> Option<Endpoint> {
+    let mut endpoint = Endpoint {
+        hostname: String::new(),
+        port: "22".to_string(),
+        proxy: String::new(),
+    };
+    for line in text.lines() {
+        let Some((key, value)) = line.trim().split_once(' ') else {
+            continue;
+        };
+        let value = value.trim();
+        match key {
+            "hostname" => endpoint.hostname = value.to_ascii_lowercase(),
+            "port" => endpoint.port = value.to_string(),
+            "proxyjump" | "proxycommand" if value != "none" => {
+                endpoint.proxy.push_str(key);
+                endpoint.proxy.push('=');
+                endpoint.proxy.push_str(value);
+                endpoint.proxy.push('\n');
+            }
+            _ => {}
+        }
+    }
+    (!endpoint.hostname.is_empty()).then_some(endpoint)
+}
+
+/// The endpoint of `host`, as `ssh -G` resolves it (which doesn't connect).
+/// Falls back to the spelling itself if ssh can't tell.
+fn endpoint(host: &HostSpec) -> Endpoint {
+    static CACHE: LazyLock<Mutex<HashMap<HostSpec, Endpoint>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+    if let Some(endpoint) = CACHE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(host)
+    {
+        return endpoint.clone();
+    }
+    let resolved = Command::new("ssh")
+        .args(host.common_args())
+        .arg("-G")
+        .arg(host.ssh_dest())
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .and_then(|out| endpoint_from_ssh_g(&String::from_utf8_lossy(&out.stdout)))
+        .unwrap_or_else(|| Endpoint {
+            hostname: host.host.to_ascii_lowercase(),
+            port: host.port.unwrap_or(22).to_string(),
+            proxy: String::new(),
+        });
+    CACHE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(host.clone(), resolved.clone());
+    resolved
+}
+
+/// Whether two destinations reach the same machine.
+pub fn same_host(a: &HostSpec, b: &HostSpec) -> bool {
+    a == b || endpoint(a) == endpoint(b)
+}
+
+/// Run `f` on the cached connection to `host`, if there is one. Comparisons
+/// use this so they never connect to a host just to ask.
+fn with_open_conn<R>(host: &HostSpec, f: impl FnOnce(&mut Conn) -> io::Result<R>) -> Option<R> {
+    connections().get_mut(host).and_then(|c| f(c).ok())
+}
+
+/// `realpath` of the longest existing prefix of `path`, with the rest of
+/// `path` appended: what `path` names on the server, even before it exists.
+fn resolve_existing(c: &mut Conn, path: &str) -> String {
+    let path = normalize_posix(path);
+    let mut head = path.as_str();
+    let mut tail: Vec<&str> = Vec::new();
+    loop {
+        if let Ok(real) = c.realpath(head) {
+            let joined = tail
+                .iter()
+                .rev()
+                .fold(real, |dir, name| posix_join(&dir, name));
+            return normalize_posix(&joined);
+        }
+        match head.rsplit_once('/') {
+            Some((parent, name)) if !name.is_empty() => {
+                tail.push(name);
+                head = if parent.is_empty() { "/" } else { parent };
+            }
+            _ => return path,
+        }
     }
 }
 
@@ -973,7 +1100,7 @@ pub fn create_dir_all(path: &Path, mode: Option<u32>) -> io::Result<()> {
 pub fn rename(src: &Path, dst: &Path) -> io::Result<()> {
     match (parse_remote(src), parse_remote(dst)) {
         (None, None) => fs::rename(src, dst),
-        (Some(a), Some(b)) if a.host == b.host => {
+        (Some(a), Some(b)) if same_host(&a.host, &b.host) => {
             with_conn(&a.host, |c| c.rename(&a.path, &b.path))
         }
         _ => Err(io::Error::new(

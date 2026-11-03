@@ -160,6 +160,46 @@ fn same_domain_and_same_file_remote() {
 }
 
 #[test]
+fn endpoint_parses_ssh_g_output() {
+    let text = "user deploy
+hostname Box.Example.COM
+port 2222
+proxyjump none
+                proxycommand ssh -W %h:%p bastion
+identityfile ~/.ssh/id_ed25519
+";
+    let e = vfs::endpoint_from_ssh_g(text).unwrap();
+    assert_eq!(e.hostname, "box.example.com");
+    assert_eq!(e.port, "2222");
+    assert!(e.proxy.contains("bastion") && !e.proxy.contains("none"));
+    assert!(
+        vfs::endpoint_from_ssh_g(
+            "user x
+"
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn same_host_sees_through_spellings() {
+    let host = |s: &str| parse_remote(&p(s)).unwrap().host;
+    // `.invalid` names can't be in anyone's ssh_config.
+    let a = host("ssh://ruf4-a.invalid/x");
+    assert!(vfs::same_host(
+        &a,
+        &host("ssh://someone@RUF4-A.invalid:22/x")
+    ));
+    assert!(!vfs::same_host(&a, &host("ssh://ruf4-a.invalid:2222/x")));
+    assert!(!vfs::same_host(&a, &host("ssh://ruf4-b.invalid/x")));
+    // A move between two spellings of one host is a rename on that host.
+    assert!(same_domain(
+        &p("ssh://ruf4-a.invalid/x"),
+        &p("ssh://root@ruf4-a.invalid/y")
+    ));
+}
+
+#[test]
 fn dir_contains_remote() {
     assert!(dir_contains(&p("ssh://box/a"), &p("ssh://box/a/b")));
     assert!(dir_contains(&p("ssh://box/a"), &p("ssh://box/a")));
