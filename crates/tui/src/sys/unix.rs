@@ -344,7 +344,7 @@ pub fn write_stdout(text: &str) {
 
     while written < buf.len() {
         let w = &buf[written..];
-        let w = &buf[..w.len().min(GIBI)];
+        let w = &w[..w.len().min(GIBI)];
         let n = unsafe { libc::write(STATE.stdout, w.as_ptr() as *const _, w.len()) };
 
         if n >= 0 {
