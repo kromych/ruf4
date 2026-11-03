@@ -300,33 +300,65 @@ fn sb_char(thumb: Option<(usize, usize)>, row: usize) -> &'static str {
 
 // ── Display-width helpers ─────────────────────────────────────────────────
 
-/// Compute the display (column) width of a string, accounting for
-/// multi-byte characters and wide (CJK) characters.
+/// Split a string into grapheme clusters, each with its display (column)
+/// width, measured the way the TUI lays out text: wide (CJK) characters take
+/// two columns, and so does an emoji sequence like 👍🏽, not four. Controls
+/// take one column, like the placeholders the TUI draws for them.
+fn display_clusters(s: &str) -> impl Iterator<Item = (&str, usize)> {
+    use ruf4_tui::unicode::tables::*;
+
+    let mut chars = s.char_indices().peekable();
+    std::iter::from_fn(move || {
+        let (start, c) = chars.next()?;
+        let mut props = ucd_grapheme_cluster_lookup(c);
+        let mut width = ucd_grapheme_cluster_character_width(props, 1);
+        let mut state = 0;
+        while let Some(&(_, next)) = chars.peek() {
+            let next_props = ucd_grapheme_cluster_lookup(next);
+            state = ucd_grapheme_cluster_joins(state, props, next_props);
+            if ucd_grapheme_cluster_joins_done(state) {
+                break;
+            }
+            width += ucd_grapheme_cluster_character_width(next_props, 1);
+            props = next_props;
+            chars.next();
+        }
+        let end = chars.peek().map_or(s.len(), |&(i, _)| i);
+        Some((&s[start..end], width.min(2)))
+    })
+}
+
+/// Compute the display (column) width of a string.
 fn str_display_width(s: &str) -> usize {
-    use ruf4_tui::unicode::tables::ucd_grapheme_cluster_character_width;
-    use ruf4_tui::unicode::tables::ucd_grapheme_cluster_lookup;
-    s.chars()
-        .map(|c| {
-            let props = ucd_grapheme_cluster_lookup(c);
-            ucd_grapheme_cluster_character_width(props, 1)
-        })
-        .sum()
+    display_clusters(s).map(|(_, w)| w).sum()
 }
 
 /// Truncate a string to fit within `max_cols` display columns.
 fn truncate_to_display_width(s: &str, max_cols: usize) -> &str {
-    use ruf4_tui::unicode::tables::ucd_grapheme_cluster_character_width;
-    use ruf4_tui::unicode::tables::ucd_grapheme_cluster_lookup;
     let mut cols = 0;
-    for (i, c) in s.char_indices() {
-        let props = ucd_grapheme_cluster_lookup(c);
-        let w = ucd_grapheme_cluster_character_width(props, 1);
+    let mut len = 0;
+    for (cluster, w) in display_clusters(s) {
         if cols + w > max_cols {
-            return &s[..i];
+            break;
         }
         cols += w;
+        len += cluster.len();
     }
-    s
+    &s[..len]
+}
+
+/// Truncate a string from the left to fit within `max_cols` display columns.
+fn truncate_start_to_display_width(s: &str, max_cols: usize) -> &str {
+    let mut excess = str_display_width(s).saturating_sub(max_cols);
+    let mut start = 0;
+    for (cluster, w) in display_clusters(s) {
+        if excess == 0 {
+            break;
+        }
+        excess = excess.saturating_sub(w);
+        start += cluster.len();
+    }
+    &s[start..]
 }
 
 fn draw_single_panel(
@@ -365,11 +397,7 @@ fn draw_single_panel(
     {
         let path_str = panel.path.to_string_lossy();
         let max_title = (width - 4).max(1) as usize;
-        let title = if path_str.len() > max_title {
-            &path_str[path_str.ceil_char_boundary(path_str.len() - max_title)..]
-        } else {
-            &path_str
-        };
+        let title = truncate_start_to_display_width(&path_str, max_title);
         ctx.label("title", title);
     }
 
@@ -627,11 +655,7 @@ fn draw_preview_panel(
             &state.preview.title
         };
         let max_title = (width - 4).max(1) as usize;
-        let display = if title.len() > max_title {
-            &title[title.ceil_char_boundary(title.len() - max_title)..]
-        } else {
-            title
-        };
+        let display = truncate_start_to_display_width(title, max_title);
         ctx.label("preview-title", display);
     }
 
