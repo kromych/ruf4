@@ -38,6 +38,8 @@
 //!   The frontend emits IR where each vreg is written once,
 //!   but physical registers like `off` are mutated repeatedly.
 //!   The optimizer relies on this.
+//!   An exception are the offsets that loops save to ensure progress, which `await input` invalidates.
+//!   They're never moved back into `off`, so that's fine for the optimizer.
 //!
 //! ## TODO
 //!

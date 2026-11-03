@@ -41,6 +41,9 @@ struct RegexSpan<'a> {
 struct Context<'a> {
     loop_start: Option<IRCell<'a>>,
     loop_exit: Option<IRCell<'a>>,
+    /// The input offset saved at the start of each iteration of the loop that pushed this context.
+    /// `None` for the contexts of other statements (`if`), even within a loop.
+    loop_saved_offset: Option<IRRegCell<'a>>,
     capture_groups: BVec<'a, (IRRegCell<'a>, IRRegCell<'a>)>,
 }
 
@@ -222,6 +225,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             Context {
                 loop_start: Some(loop_start),
                 loop_exit: Some(loop_exit),
+                loop_saved_offset: Some(saved_offset),
                 capture_groups: BVec::empty(),
             },
         );
@@ -232,6 +236,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         //   if input_offset == saved_offset {
         //       input_offset += 1;
         //   }
+        // If the iteration awaited a new line, `parse_await` invalidated `saved_offset`.
         let advance = self.compiler.alloc_ir(IR {
             next: Some(first),
             instr: IRI::AddImm {
@@ -364,6 +369,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
                 Context {
                     loop_start,
                     loop_exit,
+                    loop_saved_offset: None,
                     capture_groups: re.capture_groups,
                 },
             );
@@ -532,8 +538,53 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
 
         self.expect(';')?;
 
-        let ir = self.compiler.alloc_iri(IRI::AwaitInput);
-        Ok(IRSpan::single(ir))
+        // Every loop saves the input offset at the start of an iteration and forces it to advance if
+        // it's unchanged at the end, see `parse_until_impl`. That comparison is only meaningful within
+        // a line. Once we resume on the next one, the offset is relative to it, and may be equal to the
+        // saved one by chance. Skipping a character then would be wrong (e.g., it could be the first
+        // `"` of a closing `"""`), as awaiting the next line is progress after all.
+        //
+        // So, if the await suspends (= we're at the end of the line), we invalidate the saved offsets
+        // of all enclosing loops. Otherwise, the await is a no-op and must leave them alone, as they're
+        // what prevents zero-width iterations from looping forever.
+        //   if /$/ {
+        //       await input;
+        //       saved_offset = u32::MAX; // ...for each enclosing loop.
+        //   }
+        //
+        // NOTE: This doesn't reach loops in callers, whose registers are saved and restored by `Call`.
+        // After a callee awaited, their check may still misfire. That's harmless as long as they
+        // consume the rest of the line after the call, like markdown.lsh does.
+        let mut chain = self.compiler.build_chain();
+        chain.append(IRI::AwaitInput);
+        let mut has_loops = false;
+        for saved_offset in self.context.iter().filter_map(|ctx| ctx.loop_saved_offset) {
+            chain.append(IRI::MovImm {
+                dst: saved_offset,
+                imm: u32::MAX,
+            });
+            has_loops = true;
+        }
+        let suspend = chain.build();
+
+        if !has_loops {
+            return Ok(suspend);
+        }
+
+        let done = self.compiler.alloc_noop();
+        suspend.last.borrow_mut().set_next(done);
+        let check = self.compiler.alloc_ir(IR {
+            next: Some(done),
+            instr: IRI::If {
+                condition: Condition::EndOfLine,
+                then: suspend.first,
+            },
+            offset: usize::MAX,
+        });
+        Ok(IRSpan {
+            first: check,
+            last: done,
+        })
     }
 
     fn parse_yield(&mut self) -> CompileResult<IRSpan<'a>> {
