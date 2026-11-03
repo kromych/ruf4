@@ -654,4 +654,15 @@ mod tests {
             (MAX_WINDOW_SIZE, MAX_WINDOW_SIZE)
         );
     }
+
+    #[test]
+    fn test_bracketed_paste_is_taken_literally() {
+        let input = "\x1b[200~\x1b[8;32767;32767t\x1b[A\x1b[201~\x1b[A";
+        let mut vt_parser = vt::Parser::new();
+        let mut parser = Parser::new();
+        let events: Vec<_> = parser.parse(vt_parser.parse(input)).collect();
+        assert_eq!(events.len(), 2);
+        assert!(matches!(&events[0], Input::Paste(p) if p == b"\x1b[8;32767;32767t\x1b[A"));
+        assert!(matches!(events[1], Input::Keyboard(key) if key == vk::UP));
+    }
 }

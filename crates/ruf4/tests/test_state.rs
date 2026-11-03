@@ -589,3 +589,31 @@ fn test_click_on_quick_view_leaves_panels_alone() {
     assert_eq!(s.active, ActivePanel::Left);
     assert_eq!(s.right.cursor, 0);
 }
+
+// --- Bracketed paste ---
+
+#[test]
+fn test_paste_goes_to_command_line_as_plain_text() {
+    let mut s = test_state();
+    // A leading `+` would otherwise open "Select group".
+    s.handle_global_input(&Input::Paste(b"+x && echo\r\nrm -rf y\n".to_vec()));
+    assert!(matches!(s.dialog, Dialog::None));
+    assert!(s.command_line_active);
+    assert_eq!(s.command_line, "+x && echo  rm -rf y");
+    assert_eq!(s.cmd_cursor, s.command_line.chars().count());
+}
+
+#[test]
+fn test_paste_fills_text_dialogs_but_answers_no_prompt() {
+    let mut s = test_state();
+    s.handle_global_input(&Input::Keyboard(vk::F7)); // MkDir
+    s.handle_global_input(&Input::Paste(b"new dir".to_vec()));
+    assert!(matches!(&s.dialog, Dialog::MkDir { name } if name == "new dir"));
+
+    s.dialog = Dialog::ConfirmQuit {
+        save_settings: true,
+    };
+    s.handle_global_input(&Input::Paste(b"y".to_vec()));
+    assert!(matches!(s.dialog, Dialog::ConfirmQuit { .. }));
+    assert!(!s.quit);
+}

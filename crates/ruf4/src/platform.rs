@@ -455,13 +455,15 @@ pub fn settings_path() -> Option<PathBuf> {
 // ── Terminal screen switching ──────────────────────────────────────────────
 
 /// Leave the TUI screen: reset cursor style (DECSCUSR 0), show the cursor
-/// (DECTCEM), reset attributes, disable mouse tracking, then exit the
-/// alternate screen LAST so the primary screen is restored cleanly.
-pub const TUI_LEAVE_SEQ: &str = "\x1b[0 q\x1b[?25h\x1b[m\x1b[?1003;1006l\x1b[?1049l";
+/// (DECTCEM), reset attributes, disable mouse tracking and bracketed paste,
+/// then exit the alternate screen LAST so the primary screen is restored cleanly.
+pub const TUI_LEAVE_SEQ: &str = "\x1b[0 q\x1b[?25h\x1b[m\x1b[?1003;1006l\x1b[?2004l\x1b[?1049l";
 
 /// Enter the TUI screen: alternate screen buffer, then SGR mouse mode with
-/// all-motion tracking.
-pub const TUI_ENTER_SEQ: &str = "\x1b[?1049h\x1b[?1003;1006h";
+/// all-motion tracking, then bracketed paste, so pasted text arrives as
+/// [`Input::Paste`](ruf4_tui::input::Input::Paste) instead of being parsed
+/// as keys and escape sequences.
+pub const TUI_ENTER_SEQ: &str = "\x1b[?1049h\x1b[?1003;1006h\x1b[?2004h";
 
 /// Suspend the TUI (primary screen, cooked terminal modes), run `f`, then
 /// restore the TUI and inject a window-size event so the next frame repaints

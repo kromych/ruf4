@@ -799,6 +799,10 @@ impl State {
             self.term_size = *size;
             return false;
         }
+        if let Input::Paste(bytes) = ev {
+            self.paste(bytes);
+            return false;
+        }
         if !matches!(self.dialog, Dialog::None) {
             self.handle_dialog_input(ev);
             return false;
@@ -817,6 +821,37 @@ impl State {
             _ => {}
         }
         false
+    }
+
+    /// Pasted text goes where typing would, but only into text: a paste that
+    /// starts with `+` doesn't select files, and a `y` doesn't answer a
+    /// prompt. Line breaks and other controls become spaces, so a multi-line
+    /// paste can't run more than the one command line it lands in.
+    fn paste(&mut self, bytes: &[u8]) {
+        let text: String = String::from_utf8_lossy(bytes)
+            .trim_end_matches(['\r', '\n'])
+            .chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect();
+        if text.is_empty() || self.menu_active {
+            return;
+        }
+        match self.dialog {
+            Dialog::None => {
+                if !self.command_line_active {
+                    self.command_line_active = true;
+                    self.command_line.clear();
+                    self.cmd_cursor = 0;
+                }
+                self.command_field().insert(&text);
+            }
+            Dialog::MkDir { .. }
+            | Dialog::Rename { .. }
+            | Dialog::Copy { .. }
+            | Dialog::Move { .. }
+            | Dialog::SelectGroup { .. } => self.handle_dialog_input(&Input::Text(&text)),
+            _ => {}
+        }
     }
 
     fn handle_text(&mut self, text: &str) {
