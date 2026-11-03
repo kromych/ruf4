@@ -449,13 +449,16 @@ impl State {
             })
             .collect();
         let dir = std::env::temp_dir().join("ruf4-remote").join(host_tag);
-        if let Err(e) = std::fs::create_dir_all(&dir) {
-            self.dialog = Dialog::Error {
-                message: format!("Cannot create {}: {e}", dir.display()),
-            };
-            return;
-        }
-        let target = dir.join(name);
+        let target = match std::fs::create_dir_all(&dir).and_then(|()| vfs::join_child(&dir, name))
+        {
+            Ok(target) => target,
+            Err(e) => {
+                self.dialog = Dialog::Error {
+                    message: format!("Cannot download {name}: {e}"),
+                };
+                return;
+            }
+        };
         self.pending_open = Some(target.clone());
         self.start_job(job::spawn_download(src, target));
     }

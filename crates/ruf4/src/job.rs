@@ -343,8 +343,8 @@ fn copy_tree_inner(
                     return Ok(());
                 }
                 copy_tree_inner(
-                    &vfs::join(src, &child),
-                    &vfs::join(dst, &child),
+                    &vfs::join_child(src, &child)?,
+                    &vfs::join_child(dst, &child)?,
                     child_meta,
                     prog,
                     tx,

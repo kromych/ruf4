@@ -24,7 +24,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime};
@@ -215,6 +215,50 @@ pub fn join(dir: &Path, name: &str) -> PathBuf {
         }
         None => dir.join(name),
     }
+}
+
+/// Like [`join`], for a `name` taken from a directory listing: refuses names
+/// that aren't a single plain component of `dir`. A remote (POSIX) name can
+/// contain anything but `/` and NUL, which a hostile server doesn't even need
+/// to honor. Joined onto a local Windows path, `..\x`, `\x` and `C:\x` would
+/// escape `dir`, `a:b` would write to an alternate data stream, `nul` to a
+/// device, and `a.` (trailing dots and spaces get stripped) to `a`.
+pub fn join_child(dir: &Path, name: &str) -> io::Result<PathBuf> {
+    let valid = if is_remote(dir) {
+        !matches!(name, "" | "." | "..") && !name.contains(['/', '\0'])
+    } else {
+        let mut components = Path::new(name).components();
+        matches!(components.next(), Some(Component::Normal(c)) if c == name)
+            && components.next().is_none()
+            && !(cfg!(windows) && (name.contains(':') || is_windows_reserved(name)))
+    };
+    if !valid {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid file name for {}: {name:?}", dir.display()),
+        ));
+    }
+    Ok(join(dir, name))
+}
+
+/// Whether Win32 would not map `name` onto a file of that name: device names
+/// such as `CON` or `nul.txt`, and names ending in a dot or space.
+fn is_windows_reserved(name: &str) -> bool {
+    const DEVICES: &[&str] = &["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"];
+    let stem = name.split('.').next().unwrap_or_default().trim_end();
+    let numbered = |prefix: &str| {
+        let mut digit = stem.get(3..).unwrap_or_default().chars();
+        stem.get(..3)
+            .is_some_and(|p| p.eq_ignore_ascii_case(prefix))
+            && matches!(
+                (digit.next(), digit.next()),
+                (Some('0'..='9' | '¹' | '²' | '³'), None)
+            )
+    };
+    name.ends_with(['.', ' '])
+        || DEVICES.iter().any(|d| stem.eq_ignore_ascii_case(d))
+        || numbered("COM")
+        || numbered("LPT")
 }
 
 /// Parent directory, dispatching on scheme. Remote roots (and `/`) have none.

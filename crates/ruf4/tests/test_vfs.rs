@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use ruf4::fileops;
 use ruf4::sftp::Attrs;
 use ruf4::vfs::{
-    self, dir_contains, is_remote, join, normalize_posix, parent, parse_remote, remote_entry,
-    same_domain, shell_quote, ssh_config_hosts,
+    self, dir_contains, is_remote, join, join_child, normalize_posix, parent, parse_remote,
+    remote_entry, same_domain, shell_quote, ssh_config_hosts,
 };
 
 fn p(s: &str) -> PathBuf {
@@ -90,6 +90,49 @@ fn join_remote_relative_absolute_and_dotdot() {
 fn join_local_still_joins() {
     let joined = join(Path::new("/tmp"), "file.txt");
     assert_eq!(joined, Path::new("/tmp").join("file.txt"));
+}
+
+#[test]
+fn join_child_accepts_plain_names() {
+    let local = Path::new("dest");
+    assert_eq!(join_child(local, "a b.txt").unwrap(), local.join("a b.txt"));
+    assert_eq!(
+        join_child(&p("ssh://box/dir"), "back\\slash:colon").unwrap(),
+        p("ssh://box/dir/back\\slash:colon")
+    );
+}
+
+#[test]
+fn join_child_refuses_names_escaping_the_directory() {
+    // Remote listings can return names like these; joined unchecked they'd
+    // write outside the copy or download destination.
+    let mut hostile = vec!["", ".", "..", "../x", "a/b", "/etc/passwd", "x/"];
+    if cfg!(windows) {
+        hostile.extend([
+            "..\\x",
+            "\\x",
+            "C:\\x",
+            "C:x",
+            "\\\\host\\share\\x",
+            "a:stream",
+            "nul",
+            "NUL.txt",
+            "con .log",
+            "com1",
+            "lpt¹",
+            "trailing.",
+            "trailing ",
+        ]);
+    }
+    for name in hostile {
+        assert!(join_child(Path::new("dest"), name).is_err(), "{name:?}");
+    }
+    for name in ["console.txt", "com10", "nullable", ".hidden", "a.b.c"] {
+        assert!(join_child(Path::new("dest"), name).is_ok(), "{name:?}");
+    }
+    for name in ["", ".", "..", "../x", "a/b", "nul\0"] {
+        assert!(join_child(&p("ssh://box/dir"), name).is_err(), "{name:?}");
+    }
 }
 
 #[test]
