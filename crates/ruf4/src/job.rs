@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, RecvError, Sender, channel};
+use std::sync::mpsc::{Receiver, RecvError, Sender, TryRecvError, channel};
 use std::thread::JoinHandle;
 
 use crate::fileops;
@@ -116,11 +116,18 @@ impl Job {
     /// it is still running.
     pub fn poll(&mut self) -> Option<Vec<String>> {
         let mut finished = None;
-        while let Ok(ev) = self.events.try_recv() {
-            match ev {
-                JobEvent::Progress(p) => self.progress = p,
-                JobEvent::NeedOverwrite(name) => self.awaiting_overwrite = Some(name),
-                JobEvent::Finished { errors } => finished = Some(errors),
+        loop {
+            match self.events.try_recv() {
+                Ok(JobEvent::Progress(p)) => self.progress = p,
+                Ok(JobEvent::NeedOverwrite(name)) => self.awaiting_overwrite = Some(name),
+                Ok(JobEvent::Finished { errors }) => finished = Some(errors),
+                Err(TryRecvError::Empty) => break,
+                // Gone without a word: the worker panicked.
+                Err(TryRecvError::Disconnected) => {
+                    finished
+                        .get_or_insert_with(|| vec!["the operation failed unexpectedly".into()]);
+                    break;
+                }
             }
         }
         if finished.is_some()

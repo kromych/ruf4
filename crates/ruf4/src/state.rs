@@ -1162,13 +1162,27 @@ impl State {
         }
     }
 
-    /// Progress dialog: the only interaction is cancellation.
+    /// Progress dialog: the only interaction is cancellation. A worker stuck in
+    /// a blocking call (a dead network share, a hung remote) can't see the
+    /// request, so asking again abandons it rather than leaving the UI locked.
     fn handle_progress_dialog(&mut self, ev: &Input) {
         let cancel = matches!(ev, Input::Keyboard(key) if *key == vk::ESCAPE)
             || matches!(ev, Input::Text("c" | "C"));
-        if cancel && let Some(j) = self.job.as_mut() {
-            j.cancel();
+        let Some(job) = self.job.as_mut().filter(|_| cancel) else {
+            return;
+        };
+        if !job.cancelling {
+            job.cancel();
+            return;
         }
+        let kind = job.kind;
+        // Dropping the job detaches the thread; it stops at its next check.
+        self.job = None;
+        self.pending_open = None;
+        let note = "Stopped waiting for the operation, which isn't responding. \
+                    It may still be working in the background."
+            .to_string();
+        self.complete_job(kind, vec![note], true);
     }
 
     fn handle_dismiss_dialog(&mut self, ev: &Input) {

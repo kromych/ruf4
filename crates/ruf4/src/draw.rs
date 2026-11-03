@@ -1031,7 +1031,7 @@ fn draw_progress_dialog(
         ..DIALOG_BLUE_60
     };
     let caption = if cancelling {
-        arena_format!(ctx.arena(), "{title} - cancelling...")
+        arena_format!(ctx.arena(), "{title} - cancelling... Esc=Stop waiting")
     } else {
         arena_format!(ctx.arena(), "{title} - Esc=Cancel")
     };
