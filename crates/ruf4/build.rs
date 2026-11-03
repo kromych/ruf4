@@ -3,7 +3,13 @@ fn main() {
     {
         let rc_path = std::path::Path::new("../../resources/windows/ruf4.rc");
         if rc_path.exists() {
-            embed_resource::compile(rc_path, embed_resource::NONE);
+            use embed_resource::CompilationResult;
+            match embed_resource::compile(rc_path, embed_resource::NONE) {
+                CompilationResult::Ok | CompilationResult::NotWindows => {}
+                // The resource only carries the icon and version info, so a missing
+                // or failing resource compiler shouldn't fail the build.
+                err => println!("cargo::warning={err}"),
+            }
         }
     }
 
